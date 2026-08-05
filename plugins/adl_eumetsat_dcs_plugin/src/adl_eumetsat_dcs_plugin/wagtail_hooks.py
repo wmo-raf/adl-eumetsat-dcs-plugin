@@ -4,6 +4,7 @@ from wagtail import hooks
 from .views import (
     browse_dcp_messages,
     dcp_message_detail,
+    edit_variable_mappings,
     get_dcps_for_connection,
     refresh_dcp_list,
 )
@@ -31,5 +32,10 @@ def urlconf_eumetsat_dcs_plugin():
             "adl-eumetsat-dcs-plugin/message-detail/<int:connection_id>/",
             dcp_message_detail,
             name="eumetsat_dcs_message_detail",
+        ),
+        path(
+            "adl-eumetsat-dcs-plugin/variable-mappings/<int:station_link_id>/",
+            edit_variable_mappings,
+            name="eumetsat_dcs_edit_variable_mappings",
         ),
     ]

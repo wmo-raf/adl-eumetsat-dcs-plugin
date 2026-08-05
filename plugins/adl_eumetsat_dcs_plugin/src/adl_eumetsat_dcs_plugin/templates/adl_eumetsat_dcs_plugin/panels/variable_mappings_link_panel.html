@@ -1,0 +1,13 @@
+{% load i18n %}
+{% if station_link.pk %}
+    <a class="button button-secondary" href="{% url 'eumetsat_dcs_edit_variable_mappings' station_link.pk %}">
+        {% trans "Manage Variable Mappings" %}
+    </a>
+    <p class="help">
+        {% trans "Variable mappings for this station are managed on a dedicated page, where channel codes are extracted from the DCP's recent messages." %}
+    </p>
+{% else %}
+    <p class="help">
+        {% trans "Save this station link first, then map its variables — channel codes will be extracted from the DCP's recent messages." %}
+    </p>
+{% endif %}

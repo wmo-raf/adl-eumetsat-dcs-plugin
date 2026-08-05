@@ -1,0 +1,230 @@
+{% extends "wagtailadmin/generic/base.html" %}
+{% load i18n wagtailadmin_tags %}
+
+{% block titletag %}{% blocktrans with name=station_link %}Variable Mappings — {{ name }}{% endblocktrans %}{% endblock %}
+
+{% block extra_css %}
+    {{ block.super }}
+    <style>
+        .dcp-error {
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--w-color-critical-200);
+            background-color: var(--w-color-critical-50, transparent);
+        }
+
+        .dcp-section-heading {
+            margin-top: 2rem;
+        }
+
+        .dcp-channel-meta {
+            color: var(--w-color-text-meta);
+        }
+
+        .dcp-mapped-badge {
+            color: var(--w-color-positive-100);
+            font-weight: 600;
+        }
+    </style>
+{% endblock %}
+
+{% block main_content %}
+    <p class="help-block">
+        {% blocktrans with dcp_id=station_link.dcp_id %}Channels below were extracted from DCP {{ dcp_id }}'s messages transmitted in the last 24 hours — what the platform currently reports. Map each channel you want ingested to an ADL parameter, and select the unit the DCP reports in — the source unit shown in the table is a hint from the message body, not applied automatically. Channels no longer transmitted (e.g. after a firmware change) don't appear here, but can still be typed into a mapping row manually.{% endblocktrans %}
+    </p>
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="messages">
+                <ul>
+                    <li class="{{ message.tags }}">{{ message }}</li>
+                </ul>
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    {% if channels_error %}
+        <div class="dcp-error">
+            {% trans "Could not fetch messages from the DCS Web Service — observed channels are unavailable. You can still add mappings by typing channel codes manually." %}
+            <br>{{ channels_error }}
+        </div>
+    {% endif %}
+
+    {% if not channels and not channels_error %}
+        <div class="dcp-error">
+            {% trans "No parseable messages were transmitted by this DCP in the last 24 hours, so there are no observed channels to show. You can still add mappings by typing channel codes manually." %}
+        </div>
+    {% endif %}
+
+    {% if channels %}
+        <h2 class="dcp-section-heading">{% trans "Observed Channels (last 24 hours)" %}</h2>
+        <table class="listing">
+            <thead>
+            <tr>
+                <th>{% trans "Channel Code" %}</th>
+                <th>{% trans "Name" %}</th>
+                <th>{% trans "Source Unit (hint)" %}</th>
+                <th>{% trans "Last Seen (transmission, UTC)" %}</th>
+                <th>{% trans "Sample Value" %}</th>
+                <th>{% trans "Mapped" %}</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for channel in channels %}
+                <tr>
+                    <td><code>{{ channel.channel_id }}</code></td>
+                    <td class="dcp-channel-meta">{{ channel.name|default:"—" }}</td>
+                    <td class="dcp-channel-meta">{{ channel.unit|default:"—" }}</td>
+                    <td class="dcp-channel-meta">{{ channel.last_seen|date:"Y-m-d H:i" }}</td>
+                    <td class="dcp-channel-meta">{{ channel.sample_value|default:"—" }}</td>
+                    <td>
+                        {% if channel.mapped %}
+                            <span class="dcp-mapped-badge">✓ {% trans "Yes" %}</span>
+                        {% else %}
+                            {% trans "No" %}
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if not channel.mapped %}
+                            <button type="button" class="button button-small button-secondary dcp-add-mapping"
+                                    data-channel-id="{{ channel.channel_id }}">
+                                {% trans "Add mapping" %}
+                            </button>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+
+    <datalist id="observed-channel-options">
+        {% for channel in channels %}
+            <option value="{{ channel.channel_id }}">{{ channel.channel_id }}{% if channel.name %} — {{ channel.name }}{% endif %}{% if channel.unit %} ({{ channel.unit }}){% endif %}</option>
+        {% endfor %}
+    </datalist>
+
+    <h2 class="dcp-section-heading">{% trans "Mappings" %}</h2>
+    <form method="post" novalidate>
+        {% csrf_token %}
+        {{ formset.management_form }}
+
+        <table class="listing" id="mapping-formset-table">
+            <thead>
+            <tr>
+                <th>{% trans "ADL Parameter" %}</th>
+                <th>{% trans "DCP Channel Code" %}</th>
+                <th>{% trans "DCP Channel Unit" %}</th>
+                <th>{% trans "Delete" %}</th>
+            </tr>
+            </thead>
+            <tbody id="mapping-formset-body">
+            {% for form in formset %}
+                <tr class="{% if form.errors %}error{% endif %}">
+                    {{ form.id }}
+                    <td>
+                        {{ form.adl_parameter }}
+                        {% if form.adl_parameter.errors %}
+                            <p class="error-message">{{ form.adl_parameter.errors|join:", " }}</p>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {{ form.channel_id }}
+                        {% if form.channel_id.errors %}
+                            <p class="error-message">{{ form.channel_id.errors|join:", " }}</p>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {{ form.channel_unit }}
+                        {% if form.channel_unit.errors %}
+                            <p class="error-message">{{ form.channel_unit.errors|join:", " }}</p>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if form.instance.pk %}
+                            {{ form.DELETE }}
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+
+        {% if formset.non_form_errors %}
+            <div class="error-message">
+                {{ formset.non_form_errors }}
+            </div>
+        {% endif %}
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 1rem; align-items: center;">
+            <button type="button" class="button button-secondary" id="dcp-add-row">
+                {% trans "Add row" %}
+            </button>
+            <button type="submit" class="button button-primary">
+                {% trans "Save Mappings" %}
+            </button>
+        </div>
+    </form>
+
+    <template id="mapping-empty-form">
+        <tr>
+            {{ formset.empty_form.id }}
+            <td>{{ formset.empty_form.adl_parameter }}</td>
+            <td>{{ formset.empty_form.channel_id }}</td>
+            <td>{{ formset.empty_form.channel_unit }}</td>
+            <td></td>
+        </tr>
+    </template>
+
+    <script>
+        (function () {
+            var totalForms = document.getElementById("id_{{ formset.prefix }}-TOTAL_FORMS");
+            var body = document.getElementById("mapping-formset-body");
+            var template = document.getElementById("mapping-empty-form");
+
+            function addRow(channelId) {
+                var index = parseInt(totalForms.value, 10);
+                var html = template.innerHTML.replace(/__prefix__/g, index);
+                var wrapper = document.createElement("tbody");
+                wrapper.innerHTML = html;
+                var row = wrapper.querySelector("tr");
+                body.appendChild(row);
+                totalForms.value = index + 1;
+
+                if (channelId) {
+                    var input = row.querySelector('input[name$="-channel_id"]');
+                    if (input) {
+                        input.value = channelId;
+                    }
+                }
+                return row;
+            }
+
+            document.getElementById("dcp-add-row").addEventListener("click", function () {
+                addRow(null);
+            });
+
+            document.querySelectorAll(".dcp-add-mapping").forEach(function (button) {
+                button.addEventListener("click", function () {
+                    // Reuse the trailing blank extra row if its channel is
+                    // still empty, instead of stacking new blanks.
+                    var blank = null;
+                    body.querySelectorAll('input[name$="-channel_id"]').forEach(function (input) {
+                        if (!input.value) {
+                            blank = input;
+                        }
+                    });
+                    var row;
+                    if (blank) {
+                        blank.value = button.dataset.channelId;
+                        row = blank.closest("tr");
+                    } else {
+                        row = addRow(button.dataset.channelId);
+                    }
+                    row.querySelector("select").focus();
+                });
+            });
+        })();
+    </script>
+{% endblock %}

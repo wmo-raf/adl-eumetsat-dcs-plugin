@@ -438,21 +438,33 @@ class DCSWebServiceClient:
     def download_raw(self, dcp_id):
         """
         Calls the stateless automatic download endpoint (ACTION_DOWNLOAD)
-        and returns the raw gzip bytes for the given DCP ID.
+        and returns the raw payload bytes for the given DCP ID (gzip, or
+        already-decompressed bulk data).
+
+        The payload is sniffed rather than trusting Content-Type: the
+        server labels even successful gzip downloads as
+        "text/html; charset=UTF-8", so the header cannot distinguish
+        data from an HTML login/error page.
         """
         response = self.get("ACTION_DOWNLOAD", {"id": dcp_id})
+        content = response.content
 
-        content_type = response.headers.get("Content-Type", "")
-        if "html" in content_type.lower():
-            # server returned an HTML page (login form / error) instead of
-            # the expected gzip payload -- almost always a credentials or
-            # DCP ID problem rather than a network failure
+        if content[:2] == b"\x1f\x8b":
+            # gzip magic bytes -- the documented payload
+            return content
+
+        # An HTML login/error page opens with a tag; non-gzipped bulk
+        # data opens with the ASCII message header (8-digit code +
+        # station name), never '<'.
+        if content.lstrip()[:1] == b"<":
+            # almost always a credentials or DCP ID problem rather than
+            # a network failure
             raise DCSWebServiceConnectionError(
                 f"Expected gzip data for DCP {dcp_id}, got an HTML response "
                 "back (check credentials and DCP ID)"
             )
 
-        return response.content
+        return content
 
     def get_messages(self, dcp_id):
         """
