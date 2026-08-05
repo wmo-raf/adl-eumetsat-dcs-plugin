@@ -299,6 +299,70 @@ class DCPMessage:
         )
 
 
+def parse_dcp_admin_page(html):
+    """
+    Parses the "DCP Administration" page (the ACTION=DCP_ADMIN main-menu
+    view) into the operator plus the list of registered DCPs.
+
+    Table parsing mirrors list_available's: data rows interleave spacer
+    cells (class containing "separator", holding only &nbsp;) with real
+    content cells; divider rows are a single colspan separator cell.
+    Content cells are identified by filtering out spacers rather than by
+    fixed position. A data row has 8 content cells: checkbox, DCP ID,
+    name, downloaded date, num messages, most recent message, and two
+    link cells (List/Download -- empty for never-transmitting DCPs).
+    Rows are validated by the num-messages cell being numeric, so
+    header/summary/button rows fall through harmlessly.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    operator = None
+    heading = soup.find("h3", class_="contentMiddleHead")
+    if heading and "Operator" in heading.get_text():
+        operator = heading.get_text(strip=True).replace("Operator:", "").strip()
+
+    target_table = None
+    for table in soup.find_all("table"):
+        header_text = table.get_text()
+        if "DCP ID" in header_text and "Num Messages" in header_text:
+            target_table = table
+            break
+
+    if target_table is None:
+        raise DCSWebServiceConnectionError(
+            "Could not find the registered-DCP table on the DCP_ADMIN "
+            "page -- page structure may differ from what this client "
+            "expects (or the session bounced to a login page)"
+        )
+
+    def is_spacer_cell(td):
+        classes = td.get("class") or []
+        return any("separator" in c for c in classes)
+
+    dcps = []
+    for row in target_table.find_all("tr"):
+        content_cells = [
+            td for td in row.find_all("td") if not is_spacer_cell(td)
+        ]
+
+        if len(content_cells) != 8:
+            continue  # header row, divider row, or unrelated row
+
+        num_messages_text = content_cells[4].get_text(strip=True)
+        if not num_messages_text.isdigit():
+            continue
+
+        dcps.append({
+            "dcp_id": content_cells[1].get_text(strip=True),
+            "name": content_cells[2].get_text(strip=True),
+            "downloaded_date": content_cells[3].get_text(strip=True) or None,
+            "num_messages": int(num_messages_text),
+            "most_recent_message": content_cells[5].get_text(strip=True) or None,
+        })
+
+    return {"operator": operator, "dcps": dcps}
+
+
 class DCSWebServiceClient:
     """
     Client for the EUMETSAT Meteosat Data Collection Service (DCS) Web Service.
@@ -784,6 +848,60 @@ class DCSWebServiceClient:
             "or the page structure differs from what this client expects. "
             f"Response snippet: {snippet!r}"
         )
+
+    @property
+    def registered_dcps_cache_key(self):
+        # The registered-DCP roster is per account (unlike per-DCP message
+        # caches), so the key namespaces by user + base URL.
+        return f"dcs_web_service_registered_dcps_{self.user}_{self.baseurl}"
+
+    def list_registered_dcps(self, cache_ttl=86400):
+        """
+        Returns the DCPs registered to this account, from the "DCP
+        Administration" page (mainMenuAction.do?action=DCP_ADMIN), e.g.:
+
+            {
+              "operator": "EMI",
+              "dcps": [
+                {"dcp_id": "188990C0", "name": "ET/NEGHELE",
+                 "downloaded_date": "05/08/2026 14:36:35",
+                 "num_messages": 670,
+                 "most_recent_message": "05/08/2026 15:25:47"},
+                ...
+              ]
+            }
+
+        DCPs that have never transmitted (or aren't retained) appear with
+        num_messages == 0 and empty date fields.
+
+        The roster changes rarely (registration is an occasional admin
+        act), so the result is cached for a long TTL by default; callers
+        that need a fresh scrape can clear_registered_dcps_cache() first.
+
+        Requires a session login like list_available -- the page is
+        login-scoped (it shows the operator and a logoff link).
+        """
+        cached = cache.get(self.registered_dcps_cache_key)
+        if cached is not None:
+            return cached
+
+        session = self._get_session()
+
+        url = f"{self.baseurl}/mainMenuAction.do"
+        params = {"action": "DCP_ADMIN"}
+
+        response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        if response.status_code != 200:
+            raise DCSWebServiceConnectionError(
+                f"DCP_ADMIN returned {response.status_code}"
+            )
+
+        result = parse_dcp_admin_page(response.text)
+        cache.set(self.registered_dcps_cache_key, result, cache_ttl)
+        return result
+
+    def clear_registered_dcps_cache(self):
+        cache.delete(self.registered_dcps_cache_key)
 
     def get_latest_observations(self, dcp_id, cache_ttl=300):
         """

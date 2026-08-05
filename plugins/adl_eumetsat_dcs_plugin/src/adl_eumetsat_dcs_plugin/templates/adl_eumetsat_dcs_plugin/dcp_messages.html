@@ -31,8 +31,8 @@
     <form method="get" class="dcp-picker">
         <label for="dcp-id-select">{% trans "DCP" %}</label>
         <select id="dcp-id-select" name="dcp_id">
-            {% for id in dcp_ids %}
-                <option value="{{ id }}" {% if id == dcp_id %}selected{% endif %}>{{ id }}</option>
+            {% for option in dcp_options %}
+                <option value="{{ option.value }}" {% if option.value == dcp_id %}selected{% endif %}>{{ option.label }}</option>
             {% endfor %}
             {% if dcp_id and dcp_id not in dcp_ids %}
                 <option value="{{ dcp_id }}" selected>{{ dcp_id }}</option>

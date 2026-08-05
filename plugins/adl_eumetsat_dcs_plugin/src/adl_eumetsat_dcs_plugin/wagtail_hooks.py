@@ -1,12 +1,27 @@
 from django.urls import path
 from wagtail import hooks
 
-from .views import browse_dcp_messages, dcp_message_detail
+from .views import (
+    browse_dcp_messages,
+    dcp_message_detail,
+    get_dcps_for_connection,
+    refresh_dcp_list,
+)
 
 
 @hooks.register("register_admin_urls")
 def urlconf_eumetsat_dcs_plugin():
     return [
+        path(
+            "adl-eumetsat-dcs-plugin/conn-dcps/",
+            get_dcps_for_connection,
+            name="eumetsat_dcs_dcps_for_connection",
+        ),
+        path(
+            "adl-eumetsat-dcs-plugin/refresh-dcps/<int:connection_id>/",
+            refresh_dcp_list,
+            name="eumetsat_dcs_refresh_dcps",
+        ),
         path(
             "adl-eumetsat-dcs-plugin/messages/<int:connection_id>/",
             browse_dcp_messages,

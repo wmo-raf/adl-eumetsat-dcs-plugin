@@ -12,6 +12,7 @@ from wagtail.models import Orderable
 
 from .client import DCSWebServiceClient
 from .validators import validate_start_date
+from .widgets import DCPSelectWidget
 
 TIMEZONE_CHOICES = [(tz, tz) for tz in sorted(zoneinfo.available_timezones())]
 
@@ -66,7 +67,12 @@ class EumetsatDCSConnection(NetworkConnection):
                 "url": reverse("eumetsat_dcs_browse_messages", args=[self.id]),
                 "icon_name": "list-ul",
                 "kwargs": {"attrs": {"target": "_blank"}},
-            }
+            },
+            {
+                "label": _("Refresh DCP List"),
+                "url": reverse("eumetsat_dcs_refresh_dcps", args=[self.id]),
+                "icon_name": "rotate",
+            },
         ]
 
 
@@ -99,7 +105,7 @@ class EumetsatDCSStationLink(StationLink):
     )
 
     panels = StationLink.panels + [
-        FieldPanel("dcp_id"),
+        FieldPanel("dcp_id", widget=DCPSelectWidget),
         FieldPanel("observation_timezone"),
         FieldPanel("start_date"),
         InlinePanel("variable_mappings", label=_("Station Variable Mapping")),

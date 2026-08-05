@@ -1,0 +1,139 @@
+<div>
+    <div class="w-field__errors" style="margin-bottom: 10px">
+        <p class="error-message" id="eumetsat-dcs-dcp-error-message" style="display: none"></p>
+    </div>
+
+    <div style="display: flex; align-items: center">
+        <select name="{{ widget.name }}" {% include "django/forms/widgets/attrs.html" %}>
+        </select>
+        <div id="eumetsat-dcs-dcp-spinner" style="margin-left: 10px; display: none">
+            <svg class="icon icon-spinner w-w-8 w-h-8" aria-hidden="true">
+                <use href="#icon-spinner"></use>
+            </svg>
+        </div>
+    </div>
+
+    <script>
+        class DCPSelectWidget {
+            #defaultOption = { label: "---------", value: "" };
+
+            constructor({
+                widgetId,
+                dcpsUrl,
+                initialDcpId,
+                networkConnectionInputId,
+                errorMessageElId,
+                spinnerId,
+                defaultOption,
+            }) {
+                this.widgetId = widgetId;
+                this.dcpsUrl = dcpsUrl;
+                this.initialDcpId = initialDcpId;
+                this.#defaultOption = defaultOption || this.#defaultOption;
+
+                this.selectInput = document.getElementById(this.widgetId);
+                this.networkConnectionInput = document.getElementById(networkConnectionInputId);
+                this.errorMessageEl = document.getElementById(errorMessageElId);
+                this.spinner = document.getElementById(spinnerId);
+
+                if (!this.selectInput || !this.networkConnectionInput || !this.errorMessageEl || !this.spinner) {
+                    throw new Error("One or more required DOM elements are missing.");
+                }
+
+                this.debouncedLoad = this.debounce(this.debouncedLoad.bind(this), 300);
+                this.init();
+            }
+
+            async init() {
+                const connectionId = this.networkConnectionInput.value;
+                if (connectionId) {
+                    await this.debouncedLoad(connectionId);
+                }
+
+                this.networkConnectionInput.addEventListener("change", (event) => {
+                    this.reset();
+                    this.clearInitial();
+                    this.debouncedLoad(event.target.value);
+                });
+            }
+
+            async debouncedLoad(connectionId) {
+                this.showSpinner();
+                this.clearSelectInput();
+
+                const response = await this.fetchDcps(connectionId);
+                this.hideSpinner();
+
+                if (response.error) {
+                    this.addError(response.error);
+                    return;
+                }
+
+                this.clearError();
+                this.populateSelectInput(response);
+
+                if (this.initialDcpId) {
+                    this.setSelectedOption(this.initialDcpId);
+                    this.selectInput.dispatchEvent(new CustomEvent("change", { bubbles: true, detail: { custom: true } }));
+                }
+            }
+
+            async fetchDcps(connectionId) {
+                try {
+                    const response = await fetch(`${this.dcpsUrl}?connection_id=${connectionId}`);
+                    if (!response.ok) {
+                        const res = await response.json();
+                        throw new Error(res.error || `HTTP error! Status: ${response.status}`);
+                    }
+                    return await response.json();
+                } catch (error) {
+                    console.error("Fetch error:", error);
+                    return { error: error.message };
+                }
+            }
+
+            showSpinner() { this.spinner.style.display = "block"; }
+            hideSpinner() { this.spinner.style.display = "none"; }
+            setSelectedOption(value) { this.selectInput.value = value; }
+            clearInitial() { this.initialDcpId = ""; }
+            clearError() { this.errorMessageEl.textContent = ""; this.errorMessageEl.style.display = "none"; }
+            addError(message) { this.errorMessageEl.textContent = message; this.errorMessageEl.style.display = "block"; }
+            clearSelectInput() { this.selectInput.innerHTML = ""; }
+
+            reset() {
+                this.clearSelectInput();
+                this.clearError();
+            }
+
+            populateSelectInput(options) {
+                this.clearSelectInput();
+                this.appendOption(this.#defaultOption);
+                options.forEach(o => this.appendOption(o));
+            }
+
+            appendOption(option) {
+                const el = document.createElement("option");
+                el.value = option.value;
+                el.textContent = option.label;
+                this.selectInput.appendChild(el);
+            }
+
+            debounce(func, wait) {
+                let timeout;
+                return function (...args) {
+                    clearTimeout(timeout);
+                    timeout = setTimeout(() => func.apply(this, args), wait);
+                };
+            }
+        }
+
+        new DCPSelectWidget({
+            widgetId: "{{ widget.attrs.id }}",
+            dcpsUrl: "{{ dcps_url }}",
+            initialDcpId: "{{ widget.value|default_if_none:'' }}",
+            networkConnectionInputId: "id_network_connection",
+            errorMessageElId: "eumetsat-dcs-dcp-error-message",
+            spinnerId: "eumetsat-dcs-dcp-spinner",
+        });
+    </script>
+</div>
