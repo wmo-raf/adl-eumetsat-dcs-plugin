@@ -52,10 +52,48 @@ services:
     tty: true              # enables terminal support
     stdin_open: true       # allows interactive input
 
-  adl_celery_worker:
+  # Three queue-specific workers, mirroring the core stack: the entrypoint
+  # has no generic "celery-worker" command, and core routes ingestion to
+  # the "adl" queue and outbound dispatch to the "dispatch" queue -- a
+  # single default-queue worker would never consume them.
+  adl_celery_worker_default:
     image: adl-eumetsat-dcs-plugin_dev
-    command: celery-worker
-    container_name: adl-eumetsat-dcs-plugin-worker
+    command: celery-worker-default
+    container_name: adl-eumetsat-dcs-plugin-worker-default
+    env_file:
+      - .env
+    environment:
+      <<: *adl-variables
+      WAIT_HOSTS: adl_db:5432,adl_redis:6379,adl:8000
+    depends_on:
+      - adl
+    volumes:
+      - ./plugins/adl_eumetsat_dcs_plugin:/adl/plugins/adl_eumetsat_dcs_plugin
+    # Open stdin and tty so when attaching key input works as expected.
+    stdin_open: true
+    tty: true
+
+  adl_celery_worker_adl:
+    image: adl-eumetsat-dcs-plugin_dev
+    command: celery-worker-adl
+    container_name: adl-eumetsat-dcs-plugin-worker-adl
+    env_file:
+      - .env
+    environment:
+      <<: *adl-variables
+      WAIT_HOSTS: adl_db:5432,adl_redis:6379,adl:8000
+    depends_on:
+      - adl
+    volumes:
+      - ./plugins/adl_eumetsat_dcs_plugin:/adl/plugins/adl_eumetsat_dcs_plugin
+    # Open stdin and tty so when attaching key input works as expected.
+    stdin_open: true
+    tty: true
+
+  adl_celery_worker_dispatch:
+    image: adl-eumetsat-dcs-plugin_dev
+    command: celery-worker-dispatch
+    container_name: adl-eumetsat-dcs-plugin-worker-dispatch
     env_file:
       - .env
     environment:
