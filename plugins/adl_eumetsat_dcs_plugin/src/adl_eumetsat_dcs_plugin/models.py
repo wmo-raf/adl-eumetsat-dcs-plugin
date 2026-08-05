@@ -7,7 +7,7 @@ from django.db import models
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from modelcluster.fields import ParentalKey
-from wagtail.admin.panels import FieldPanel, InlinePanel, MultiFieldPanel
+from wagtail.admin.panels import FieldPanel, MultiFieldPanel, Panel
 from wagtail.models import Orderable
 
 from .client import DCSWebServiceClient
@@ -76,6 +76,23 @@ class EumetsatDCSConnection(NetworkConnection):
         ]
 
 
+class VariableMappingsLinkPanel(Panel):
+    """
+    Renders a link to the station link's dedicated variable-mapping page
+    on the edit form (mappings are managed there, not inline, so the
+    channel options can be extracted from the DCP's actual messages).
+    Renders nothing on the create form — the page needs a saved pk.
+    """
+
+    class BoundPanel(Panel.BoundPanel):
+        template_name = "adl_eumetsat_dcs_plugin/panels/variable_mappings_link_panel.html"
+
+        def get_context_data(self, parent_context=None):
+            context = super().get_context_data(parent_context)
+            context["station_link"] = self.instance
+            return context
+
+
 class EumetsatDCSStationLink(StationLink):
     """
     Links an ADL station to one DCP (Data Collection Platform) ID on a
@@ -104,11 +121,14 @@ class EumetsatDCSStationLink(StationLink):
                     "Ignored if data has already been collected for this station."),
     )
 
+    # Variable mappings are deliberately NOT edited inline here — they
+    # live on a dedicated page (see edit_variable_mappings) where the
+    # channel options are extracted from the DCP's actual messages.
     panels = StationLink.panels + [
         FieldPanel("dcp_id", widget=DCPSelectWidget),
         FieldPanel("observation_timezone"),
         FieldPanel("start_date"),
-        InlinePanel("variable_mappings", label=_("Station Variable Mapping")),
+        VariableMappingsLinkPanel(),
     ]
 
     class Meta:
@@ -132,6 +152,15 @@ class EumetsatDCSStationLink(StationLink):
                     "dcp_id": _("DCP ID must contain only hexadecimal "
                                 "characters (0-9, A-F).")
                 })
+
+    def get_extra_model_admin_links(self):
+        return [
+            {
+                "label": _("Variable Mappings"),
+                "url": reverse("eumetsat_dcs_edit_variable_mappings", args=[self.id]),
+                "icon_name": "list-ul",
+            },
+        ]
 
     def get_variable_mappings(self):
         """

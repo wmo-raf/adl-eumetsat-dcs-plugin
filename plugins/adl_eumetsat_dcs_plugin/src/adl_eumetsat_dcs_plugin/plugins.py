@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 from adl.core.registries import Plugin
 
+from .utils import parse_transmission_time
+
 logger = logging.getLogger(__name__)
 
 # Messages are filtered on their transmission time (header date/time),
@@ -68,18 +70,10 @@ class EumetsatDCSPlugin(Plugin):
     def _parse_transmission_time(self, message):
         """
         Parses the message header's transmission date/time (DD/MM/YY +
-        HH:MM:SS, UTC) into an aware UTC datetime.
+        HH:MM:SS, UTC) into an aware UTC datetime. Shared with the
+        variable-mapping page's channel extraction.
         """
-        try:
-            tx_time = datetime.strptime(
-                f"{message.date} {message.time}", "%d/%m/%y %H:%M:%S"
-            )
-        except ValueError:
-            logger.warning("DCP %s seq %s: unparseable transmission time %r %r, skipped",
-                           message.dcp_id, message.sequence, message.date, message.time)
-            return None
-
-        return tx_time.replace(tzinfo=timezone.utc)
+        return parse_transmission_time(message)
 
     def _resolve_channel_time(self, channel, body_timezone, station_link, message):
         """

@@ -1,19 +1,39 @@
 import logging
+from datetime import timedelta
 
 import requests
 from adl.core.utils import get_object_or_none
 from django.contrib import messages
+from django.forms import inlineformset_factory
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.translation import gettext_lazy as _
 
 from .client import DCSWebServiceConnectionError
-from .models import EumetsatDCSConnection
-from .utils import get_registered_dcp_options
+from .forms import EumetsatDCSVariableMappingForm
+from .models import (
+    EumetsatDCSConnection,
+    EumetsatDCSStationLink,
+    EumetsatDCSStationLinkVariableMapping,
+)
+from .utils import extract_observed_channels, get_registered_dcp_options
 
 logger = logging.getLogger(__name__)
+
+# How far back the mapping page's "Observed Channels" table looks,
+# filtered on message transmission time.
+OBSERVED_CHANNELS_WINDOW = timedelta(hours=24)
+
+VariableMappingFormSet = inlineformset_factory(
+    EumetsatDCSStationLink,
+    EumetsatDCSStationLinkVariableMapping,
+    form=EumetsatDCSVariableMappingForm,
+    extra=1,
+    can_delete=True,
+)
 
 
 def _breadcrumbs(connection, leaf_label):
@@ -128,6 +148,65 @@ def browse_dcp_messages(request, connection_id):
         "header_icon": "list-ul",
     }
     return render(request, "adl_eumetsat_dcs_plugin/dcp_messages.html", context)
+
+
+def edit_variable_mappings(request, station_link_id):
+    """
+    Per-station variable-mapping page: an "observed channels" table
+    extracted live from the DCP's messages transmitted in the last 24
+    hours, above an editable mapping formset. The download is always the
+    full backlog (the server ignores date filters) — the 24h cut is an
+    extraction filter so the table shows the DCP's CURRENT sensor
+    vocabulary rather than burying it under weeks of dead codes. If the
+    DCS fetch fails, the formset stays fully usable via free-text
+    channel entry.
+    """
+    station_link = get_object_or_404(EumetsatDCSStationLink, pk=station_link_id)
+    connection = station_link.network_connection
+
+    channels = []
+    channels_error = None
+    client = connection.get_api_client()
+    try:
+        dcp_messages = client.get_latest_observations(station_link.dcp_id)
+        channels = extract_observed_channels(
+            dcp_messages, since=timezone.now() - OBSERVED_CHANNELS_WINDOW
+        )
+    except (DCSWebServiceConnectionError, requests.RequestException) as e:
+        logger.error("Channel extraction failed for DCP %s: %s",
+                     station_link.dcp_id, e)
+        channels_error = str(e)
+
+    if request.method == "POST":
+        formset = VariableMappingFormSet(request.POST, instance=station_link)
+        if formset.is_valid():
+            formset.save()
+            messages.success(request, _("Variable mappings saved."))
+            return redirect(request.path)
+    else:
+        formset = VariableMappingFormSet(instance=station_link)
+
+    mapped_codes = set(
+        station_link.variable_mappings.values_list("channel_id", flat=True)
+    )
+    for channel in channels:
+        channel["mapped"] = channel["channel_id"] in mapped_codes
+
+    title = _("Variable Mappings — %s") % station_link
+    context = {
+        "station_link": station_link,
+        "connection": connection,
+        "channels": channels,
+        "channels_error": channels_error,
+        "formset": formset,
+        "breadcrumbs_items": [
+            {"url": reverse("wagtailadmin_home"), "label": _("Home")},
+            {"url": None, "label": title},
+        ],
+        "header_title": title,
+        "header_icon": "list-ul",
+    }
+    return render(request, "adl_eumetsat_dcs_plugin/variable_mappings.html", context)
 
 
 def dcp_message_detail(request, connection_id):
