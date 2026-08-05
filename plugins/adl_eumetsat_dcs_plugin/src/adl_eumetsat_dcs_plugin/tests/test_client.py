@@ -1,7 +1,11 @@
+import gzip
+from unittest.mock import MagicMock, patch
+
 from django.test import SimpleTestCase
 
 from adl_eumetsat_dcs_plugin.client import (
     DCPMessage,
+    DCSWebServiceClient,
     DCSWebServiceConnectionError,
     parse_xml_body,
 )
@@ -44,6 +48,46 @@ class IterFromBulkTests(SimpleTestCase):
 
         with self.assertRaises(DCSWebServiceConnectionError):
             list(DCPMessage.iter_from_bulk(truncated))
+
+
+class DownloadRawTests(SimpleTestCase):
+    """
+    download_raw must sniff the payload, not trust Content-Type: the
+    server labels even successful gzip downloads "text/html;
+    charset=UTF-8", so the header can't distinguish data from an HTML
+    login/error page.
+    """
+
+    def _client_returning(self, content):
+        client = DCSWebServiceClient(
+            baseurl="https://example.invalid/dcswebservice",
+            user="u", password="p",
+        )
+        response = MagicMock()
+        response.content = content
+        return client, patch.object(client, "get", return_value=response)
+
+    def test_gzip_payload_returned_despite_html_content_type(self):
+        payload = gzip.compress(build_bulk({"body": FORMAT_A_BODY}))
+        client, mocked = self._client_returning(payload)
+
+        with mocked:
+            self.assertEqual(client.download_raw("188990C0"), payload)
+
+    def test_plain_bulk_payload_returned(self):
+        payload = build_bulk({"body": FORMAT_A_BODY})
+        client, mocked = self._client_returning(payload)
+
+        with mocked:
+            self.assertEqual(client.download_raw("188990C0"), payload)
+
+    def test_html_login_page_raises(self):
+        payload = b"\n  <!DOCTYPE html><html><body>Please log in</body></html>"
+        client, mocked = self._client_returning(payload)
+
+        with mocked:
+            with self.assertRaises(DCSWebServiceConnectionError):
+                client.download_raw("188990C0")
 
 
 class ParseXmlBodyTests(SimpleTestCase):
