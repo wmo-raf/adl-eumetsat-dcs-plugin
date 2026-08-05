@@ -170,3 +170,5 @@ cython_debug/
 .DS_Store
 
 # End of https://www.toptal.com/developers/gitignore/api/django
+
+docker-compose.override.yml

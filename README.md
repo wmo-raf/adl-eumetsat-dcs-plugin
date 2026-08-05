@@ -1,6 +1,26 @@
 # ADL EUMETSAT DCS Plugin
 
-An ADL plugin for ingesting DCP messages from the EUMETSAT Meteosat Data Collection Service (DCS) Web Service
+An ADL plugin for ingesting DCP (Data Collection Platform) messages from the
+EUMETSAT Meteosat [Data Collection Service (DCS) Web Service](https://user.eumetsat.int/resources/user-guides/dcs-web-service-user-guide)
+(`https://service.eumetsat.int/dcswebservice/` — note `dcswebservice` with an
+*s*, distinct from the `dcpwebservice` public viewer path).
+
+- One **EUMETSAT DCS Connection** holds one set of DCS Web Service credentials.
+- One **EUMETSAT DCS Station Link** binds an ADL station to one DCP ID
+  (e.g. `188990C0`) and maps DCP channel/sensor codes (e.g. `WSAV`, `TAAV`)
+  to ADL parameters. Channel codes vary per platform/firmware, so mappings
+  are configured per station.
+- The station link's **Observation Timezone** localizes body timestamps that
+  don't declare their own offset (compact Format-B bodies); verbose Format-A
+  XML bodies declare an offset which takes precedence.
+- The connection's **Browse DCP Messages** admin link lists the messages the
+  service holds for a DCP and renders individual messages (parsed channels
+  plus raw body) — a debug/browse convenience separate from ingestion.
+
+Ingestion pulls the full message backlog per DCP (the service's download
+endpoint ignores date scoping), caches it briefly, and filters client-side
+by transmission time. Message bodies using encodings the parser does not
+handle yet (colon-tag / pseudo-binary) are skipped with a log line.
 
 ## Getting started
 

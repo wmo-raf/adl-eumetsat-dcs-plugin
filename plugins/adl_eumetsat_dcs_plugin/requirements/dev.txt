@@ -4,14 +4,22 @@
 #
 #    pip-compile --output-file=dev.txt dev.in
 #
+beautifulsoup4==4.15.0
+    # via -r /Users/otenyo/Projects/wmo/adl-project/adl-plugins/adl-eumetsat-dcs-plugin/plugins/adl_eumetsat_dcs_plugin/requirements/base.in
 build==1.2.2.post1
     # via
     #   -r dev.in
     #   pip-tools
+certifi==2026.7.22
+    # via requests
+charset-normalizer==3.4.9
+    # via requests
 click==8.1.7
     # via pip-tools
 flake8==7.0.0
     # via -r dev.in
+idna==3.18
+    # via requests
 mccabe==0.7.0
     # via flake8
 packaging==24.1
@@ -28,6 +36,14 @@ pyproject-hooks==1.2.0
     # via
     #   build
     #   pip-tools
+requests==2.34.2
+    # via -r /Users/otenyo/Projects/wmo/adl-project/adl-plugins/adl-eumetsat-dcs-plugin/plugins/adl_eumetsat_dcs_plugin/requirements/base.in
+soupsieve==2.9.1
+    # via beautifulsoup4
+typing-extensions==4.16.0
+    # via beautifulsoup4
+urllib3==2.7.0
+    # via requests
 wheel==0.46.2
     # via
     #   -r dev.in

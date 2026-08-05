@@ -1,0 +1,102 @@
+{% extends "wagtailadmin/generic/base.html" %}
+{% load i18n wagtailadmin_tags %}
+
+{% block titletag %}{% blocktrans %}DCP Message — {{ date }}{% endblocktrans %}{% endblock %}
+
+{% block extra_css %}
+    {{ block.super }}
+    <style>
+        .dcp-error {
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--w-color-critical-200);
+            background-color: var(--w-color-critical-50, transparent);
+        }
+
+        .dcp-section {
+            margin-bottom: 2rem;
+        }
+
+        .dcp-raw-body {
+            padding: 1rem;
+            border: 1px solid var(--w-color-border-furniture);
+            background-color: var(--w-color-grey-50);
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+    </style>
+{% endblock %}
+
+{% block main_content %}
+    {% if error %}
+        <div class="dcp-error">{{ error }}</div>
+    {% endif %}
+
+    {% if detail %}
+        <div class="dcp-section">
+            <h2>{% trans "Message Fields" %}</h2>
+            <table class="listing">
+                <thead>
+                <tr>
+                    <th>{% trans "Field" %}</th>
+                    <th>{% trans "Value" %}</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for label, value in detail.fields.items %}
+                    <tr>
+                        <td>{{ label }}</td>
+                        <td>{{ value }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if detail.data %}
+            <div class="dcp-section">
+                <h2>{% trans "Parsed Channels" %}</h2>
+                <p>
+                    {% trans "Station" %}: {{ detail.data.station_id|default:"—" }}
+                    {% if detail.data.station_name %}({{ detail.data.station_name }}){% endif %}
+                    {% if detail.data.timezone %}· {% trans "Timezone" %}: {{ detail.data.timezone }}{% endif %}
+                </p>
+                <table class="listing">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Channel" %}</th>
+                        <th>{% trans "Name" %}</th>
+                        <th>{% trans "Unit" %}</th>
+                        <th>{% trans "Time" %}</th>
+                        <th>{% trans "Value" %}</th>
+                        <th>{% trans "Error Code" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for channel in detail.data.channels %}
+                        <tr>
+                            <td>{{ channel.channel_id }}</td>
+                            <td>{{ channel.name|default:"—" }}</td>
+                            <td>{{ channel.unit|default:"—" }}</td>
+                            <td>{{ channel.time }}</td>
+                            <td>{{ channel.value }}</td>
+                            <td>{{ channel.errorcode|default:"—" }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="dcp-section">
+                <h2>{% trans "Parsed Channels" %}</h2>
+                <p>{% trans "This message body uses an encoding the parser does not handle yet (e.g. colon-tag or pseudo-binary) — see the raw body below." %}</p>
+            </div>
+        {% endif %}
+
+        <div class="dcp-section">
+            <h2>{% trans "Raw Body" %}</h2>
+            <pre class="dcp-raw-body">{{ raw_body_repr }}</pre>
+        </div>
+    {% endif %}
+{% endblock %}

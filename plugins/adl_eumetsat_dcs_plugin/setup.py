@@ -22,12 +22,14 @@ install_requires = get_requirements("base")
 setup(
     name="adl-eumetsat-dcs-plugin",
     version=VERSION,
-    url="TODO",
-    author="TODO",
-    author_email="TODO",
-    license="TODO",
-    description="TODO",
-    long_description="TODO",
+    url="https://github.com/wmo-raf/adl-eumetsat-dcs-plugin",
+    author="WMO RAF",
+    author_email="eotenyo@wmo.int",
+    license="MIT",
+    description="An ADL plugin for ingesting DCP messages from the EUMETSAT "
+                "Meteosat Data Collection Service (DCS) Web Service",
+    long_description="An ADL plugin for ingesting DCP messages from the EUMETSAT "
+                     "Meteosat Data Collection Service (DCS) Web Service",
     platforms=["linux"],
     package_dir={"": "src"},
     packages=find_packages("src"),

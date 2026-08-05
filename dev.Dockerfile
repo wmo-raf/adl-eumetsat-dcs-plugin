@@ -10,6 +10,9 @@ ENV PLUGIN_BUILD_GID=${PLUGIN_BUILD_GID:-9999}
 
 # If we aren't building as the same user that owns all the files in the base
 # image/installed plugins we need to chown everything first.
+# The base image ends as a non-root user; the user/group remapping and
+# plugin install below need root, and the trailing USER drops back down.
+USER root
 COPY --from=base --chown=$PLUGIN_BUILD_UID:$PLUGIN_BUILD_GID /adl /adl
 RUN groupmod -g $PLUGIN_BUILD_GID adl_docker_group && usermod -u $PLUGIN_BUILD_UID $DOCKER_USER
 

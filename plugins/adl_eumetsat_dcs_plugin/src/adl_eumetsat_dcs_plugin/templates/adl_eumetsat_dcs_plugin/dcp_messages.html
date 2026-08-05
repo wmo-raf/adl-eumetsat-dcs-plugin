@@ -1,0 +1,83 @@
+{% extends "wagtailadmin/generic/base.html" %}
+{% load i18n wagtailadmin_tags %}
+
+{% block titletag %}{% blocktrans with name=connection.name %}DCP Messages — {{ name }}{% endblocktrans %}{% endblock %}
+
+{% block extra_css %}
+    {{ block.super }}
+    <style>
+        .dcp-picker {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .dcp-summary {
+            margin-bottom: 1.5rem;
+            color: var(--w-color-text-meta);
+        }
+
+        .dcp-error {
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--w-color-critical-200);
+            background-color: var(--w-color-critical-50, transparent);
+        }
+    </style>
+{% endblock %}
+
+{% block main_content %}
+    <form method="get" class="dcp-picker">
+        <label for="dcp-id-select">{% trans "DCP" %}</label>
+        <select id="dcp-id-select" name="dcp_id">
+            {% for id in dcp_ids %}
+                <option value="{{ id }}" {% if id == dcp_id %}selected{% endif %}>{{ id }}</option>
+            {% endfor %}
+            {% if dcp_id and dcp_id not in dcp_ids %}
+                <option value="{{ dcp_id }}" selected>{{ dcp_id }}</option>
+            {% endif %}
+        </select>
+        <button type="submit" class="button">{% trans "Load" %}</button>
+    </form>
+
+    {% if error %}
+        <div class="dcp-error">{{ error }}</div>
+    {% endif %}
+
+    {% if listing %}
+        <p class="dcp-summary">
+            {% trans "Operator" %}: {{ listing.operator|default:"—" }} ·
+            {% trans "DCP ID" %}: {{ listing.dcp_id|default:dcp_id }} ·
+            {% trans "Name" %}: {{ listing.name|default:"—" }} ·
+            {% trans "Downloaded Date" %}: {{ listing.downloaded_date|default:"—" }}
+        </p>
+
+        <table class="listing">
+            <thead>
+            <tr>
+                <th>{% trans "Date" %}</th>
+                <th>{% trans "Size (bytes)" %}</th>
+                <th>{% trans "Detail" %}</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for message in listing.messages %}
+                <tr>
+                    <td>{{ message.date }}</td>
+                    <td>{{ message.size }}</td>
+                    <td>
+                        <a href="{% url 'eumetsat_dcs_message_detail' connection.id %}?dcp_id={{ dcp_id|urlencode }}&amp;date={{ message.date|urlencode }}">
+                            {% trans "View" %}
+                        </a>
+                    </td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="3">{% trans "No messages available for this DCP." %}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endblock %}
