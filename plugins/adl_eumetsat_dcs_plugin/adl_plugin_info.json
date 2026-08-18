@@ -1,6 +1,6 @@
 {
   "name": "ADL EUMETSAT DCS Plugin",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "An ADL plugin for ingesting DCP messages from the EUMETSAT Meteosat Data Collection Service (DCS) Web Service",
   "author": "WMO RAF",
   "author_url": "https://github.com/wmo-raf",
