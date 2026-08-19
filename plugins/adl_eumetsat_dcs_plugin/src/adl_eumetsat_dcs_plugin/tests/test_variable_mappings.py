@@ -252,3 +252,70 @@ class EditVariableMappingsViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context["formset"].errors[0])
         self.assertEqual(self.station_link.variable_mappings.count(), 0)
+
+    def _backdated_messages(self):
+        """
+        One message inside the 24h default, one 20 days old. TAAV's
+        name/unit exist only in the old message, so its presence is a
+        clean signal for whether the wide window was applied.
+        """
+        now = dj_timezone.now()
+        return messages_from_specs(
+            {"body": format_a_wind_body(b"0.9"), "sequence": 1,
+             **tx_spec(now - timedelta(hours=2))},
+            {"body": FORMAT_A_BODY_WITH_ERRORCODE, "sequence": 2,
+             **tx_spec(now - timedelta(days=20))},
+        )
+
+    def test_default_window_is_24h_and_excludes_older_channels(self):
+        with self._mock_client(messages=self._backdated_messages()):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["window_token"], "24h")
+        channel_ids = {c["channel_id"] for c in response.context["channels"]}
+        self.assertIn("WSAV", channel_ids)
+        self.assertNotIn("TAAV", channel_ids)
+
+    def test_all_window_includes_channels_older_than_the_default(self):
+        with self._mock_client(messages=self._backdated_messages()):
+            response = self.client.get(self.url, {"window": "all"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["window_token"], "all")
+        channel_ids = {c["channel_id"] for c in response.context["channels"]}
+        self.assertIn("WSAV", channel_ids)
+        # Only reachable via the 20-day-old message: proves the window
+        # widened rather than the default silently sticking.
+        self.assertIn("TAAV", channel_ids)
+
+    def test_unrecognised_window_falls_back_to_the_default(self):
+        with self._mock_client(messages=self._backdated_messages()):
+            response = self.client.get(self.url, {"window": "not-a-window"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["window_token"], "24h")
+        channel_ids = {c["channel_id"] for c in response.context["channels"]}
+        self.assertNotIn("TAAV", channel_ids)
+
+    def test_post_redirect_preserves_the_selected_window(self):
+        # request.path would drop ?window=, snapping the operator back to
+        # 24h — and to an empty table — right after a successful save.
+        parameter = DataParameterFactory()
+        unit = UnitFactory()
+        data = {
+            "variable_mappings-TOTAL_FORMS": "1",
+            "variable_mappings-INITIAL_FORMS": "0",
+            "variable_mappings-MIN_NUM_FORMS": "0",
+            "variable_mappings-MAX_NUM_FORMS": "1000",
+            "variable_mappings-0-id": "",
+            "variable_mappings-0-adl_parameter": str(parameter.id),
+            "variable_mappings-0-channel_id": "TAAV",
+            "variable_mappings-0-channel_unit": str(unit.id),
+        }
+
+        with self._mock_client(messages=self._backdated_messages()):
+            response = self.client.post(f"{self.url}?window=all", data)
+            self.assertRedirects(response, f"{self.url}?window=all")
+        self.assertEqual(self.station_link.variable_mappings.get().channel_id,
+                         "TAAV")

@@ -23,9 +23,43 @@ from .utils import extract_observed_channels, get_registered_dcp_options
 
 logger = logging.getLogger(__name__)
 
-# How far back the mapping page's "Observed Channels" table looks,
-# filtered on message transmission time.
-OBSERVED_CHANNELS_WINDOW = timedelta(hours=24)
+# Ladder for the mapping page's "Observed Channels" window selector,
+# filtered on message transmission time. Escalates in roughly-x3 steps
+# so an operator hunting a quiet DCP reaches "everything" in three
+# clicks. A None delta means no filtering at all.
+#
+# Widening is free: ACTION_DOWNLOAD ignores date filters and always
+# returns the full backlog (see client.build_download_url), so `since`
+# is a pure post-filter over messages already in memory. Nothing above
+# ~30d is offered because the service's own retention has been observed
+# at ~28 days — a "30d" rung would render identically to "All time".
+OBSERVED_CHANNELS_WINDOWS = (
+    ("6h", _("Last 6 hours"), timedelta(hours=6)),
+    ("24h", _("Last 24 hours"), timedelta(hours=24)),
+    ("3d", _("Last 3 days"), timedelta(days=3)),
+    ("7d", _("Last 7 days"), timedelta(days=7)),
+    ("all", _("All time"), None),
+)
+
+DEFAULT_OBSERVED_CHANNELS_WINDOW = "24h"
+
+
+def resolve_observed_channels_window(value):
+    """
+    Maps a ``?window=`` token to its ``(token, label, delta)`` rung.
+
+    Unrecognised tokens — hand-edited URLs, stale bookmarks — fall
+    back to the default silently rather than erroring: this is a
+    display filter, and an unusable page is a worse answer than a
+    24-hour one.
+    """
+    for rung in OBSERVED_CHANNELS_WINDOWS:
+        if rung[0] == value:
+            return rung
+    for rung in OBSERVED_CHANNELS_WINDOWS:
+        if rung[0] == DEFAULT_OBSERVED_CHANNELS_WINDOW:
+            return rung
+
 
 VariableMappingFormSet = inlineformset_factory(
     EumetsatDCSStationLink,
@@ -153,25 +187,33 @@ def browse_dcp_messages(request, connection_id):
 def edit_variable_mappings(request, station_link_id):
     """
     Per-station variable-mapping page: an "observed channels" table
-    extracted live from the DCP's messages transmitted in the last 24
-    hours, above an editable mapping formset. The download is always the
-    full backlog (the server ignores date filters) — the 24h cut is an
-    extraction filter so the table shows the DCP's CURRENT sensor
-    vocabulary rather than burying it under weeks of dead codes. If the
-    DCS fetch fails, the formset stays fully usable via free-text
-    channel entry.
+    extracted live from the DCP's recent messages, above an editable
+    mapping formset. The download is always the full backlog (the
+    server ignores date filters) — the window is an extraction filter
+    so the table shows the DCP's CURRENT sensor vocabulary rather than
+    burying it under weeks of dead codes.
+
+    ``?window=`` widens that filter on demand (see
+    OBSERVED_CHANNELS_WINDOWS) for hunting a DCP that has been quiet
+    longer than the 24h default. It survives a save, so mapping a
+    channel found at a wide window does not snap the table back to
+    empty. If the DCS fetch fails, the formset stays fully usable via
+    free-text channel entry.
     """
     station_link = get_object_or_404(EumetsatDCSStationLink, pk=station_link_id)
     connection = station_link.network_connection
+
+    window_token, window_label, window_delta = resolve_observed_channels_window(
+        request.GET.get("window")
+    )
+    since = timezone.now() - window_delta if window_delta else None
 
     channels = []
     channels_error = None
     client = connection.get_api_client()
     try:
         dcp_messages = client.get_latest_observations(station_link.dcp_id)
-        channels = extract_observed_channels(
-            dcp_messages, since=timezone.now() - OBSERVED_CHANNELS_WINDOW
-        )
+        channels = extract_observed_channels(dcp_messages, since=since)
     except (DCSWebServiceConnectionError, requests.RequestException) as e:
         logger.error("Channel extraction failed for DCP %s: %s",
                      station_link.dcp_id, e)
@@ -182,7 +224,9 @@ def edit_variable_mappings(request, station_link_id):
         if formset.is_valid():
             formset.save()
             messages.success(request, _("Variable mappings saved."))
-            return redirect(request.path)
+            # Full path, not request.path: keeps ?window= across the save
+            # so the table the operator was working from stays on screen.
+            return redirect(request.get_full_path())
     else:
         formset = VariableMappingFormSet(instance=station_link)
 
@@ -198,6 +242,10 @@ def edit_variable_mappings(request, station_link_id):
         "connection": connection,
         "channels": channels,
         "channels_error": channels_error,
+        "window_token": window_token,
+        "window_label": window_label,
+        "window_options": [{"value": t, "label": lbl}
+                           for t, lbl, _delta in OBSERVED_CHANNELS_WINDOWS],
         "formset": formset,
         "breadcrumbs_items": [
             {"url": reverse("wagtailadmin_home"), "label": _("Home")},

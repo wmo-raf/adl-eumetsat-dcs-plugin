@@ -25,13 +25,36 @@
             color: var(--w-color-positive-100);
             font-weight: 600;
         }
+
+        .dcp-window-form {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .dcp-window-form label {
+            font-weight: 600;
+        }
     </style>
 {% endblock %}
 
 {% block main_content %}
     <p class="help-block">
-        {% blocktrans with dcp_id=station_link.dcp_id %}Channels below were extracted from DCP {{ dcp_id }}'s messages transmitted in the last 24 hours — what the platform currently reports. Map each channel you want ingested to an ADL parameter, and select the unit the DCP reports in — the source unit shown in the table is a hint from the message body, not applied automatically. Channels no longer transmitted (e.g. after a firmware change) don't appear here, but can still be typed into a mapping row manually.{% endblocktrans %}
+        {% blocktrans with dcp_id=station_link.dcp_id %}Channels below were extracted from DCP {{ dcp_id }}'s messages transmitted within the selected window — narrow it to see what the platform reports now, widen it to hunt a DCP that has been quiet. Map each channel you want ingested to an ADL parameter, and select the unit the DCP reports in — the source unit shown in the table is a hint from the message body, not applied automatically. Channels transmitted outside the window don't appear here, but can still be typed into a mapping row manually.{% endblocktrans %}
     </p>
+
+    <form method="get" class="dcp-window-form">
+        <label for="dcp-window-select">{% trans "Observed channels window" %}</label>
+        <select name="window" id="dcp-window-select">
+            {% for option in window_options %}
+                <option value="{{ option.value }}"{% if option.value == window_token %} selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+        </select>
+        <noscript>
+            <button type="submit" class="button button-small button-secondary">{% trans "Apply" %}</button>
+        </noscript>
+    </form>
 
     {% if messages %}
         {% for message in messages %}
@@ -52,12 +75,12 @@
 
     {% if not channels and not channels_error %}
         <div class="dcp-error">
-            {% trans "No parseable messages were transmitted by this DCP in the last 24 hours, so there are no observed channels to show. You can still add mappings by typing channel codes manually." %}
+            {% blocktrans with window=window_label|lower %}This DCP transmitted no parseable messages within the selected window ({{ window }}), so there are no observed channels to show. Try a wider window above, or add mappings by typing channel codes manually.{% endblocktrans %}
         </div>
     {% endif %}
 
     {% if channels %}
-        <h2 class="dcp-section-heading">{% trans "Observed Channels (last 24 hours)" %}</h2>
+        <h2 class="dcp-section-heading">{% blocktrans with window=window_label|lower %}Observed Channels ({{ window }}){% endblocktrans %}</h2>
         <table class="listing">
             <thead>
             <tr>
@@ -199,6 +222,13 @@
                     }
                 }
                 return row;
+            }
+
+            var windowSelect = document.getElementById("dcp-window-select");
+            if (windowSelect) {
+                windowSelect.addEventListener("change", function () {
+                    windowSelect.form.submit();
+                });
             }
 
             document.getElementById("dcp-add-row").addEventListener("click", function () {
