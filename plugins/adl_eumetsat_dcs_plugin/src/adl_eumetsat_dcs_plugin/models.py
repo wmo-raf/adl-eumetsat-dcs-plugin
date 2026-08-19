@@ -116,9 +116,13 @@ class EumetsatDCSStationLink(StationLink):
         blank=True,
         null=True,
         validators=[validate_start_date],
-        verbose_name=_("Initial Collection Start Date"),
-        help_text=_("The date to start collecting data on the first run. "
-                    "Ignored if data has already been collected for this station."),
+        verbose_name=_("Collection Start Date"),
+        help_text=_(
+            "Collection never starts before this date. On the first run it is "
+            "the start of the backfill; afterwards, moving it forward past the "
+            "latest saved record skips the gap. Leave empty to start from the "
+            "last 24 hours."
+        ),
     )
 
     # Variable mappings are deliberately NOT edited inline here — they
