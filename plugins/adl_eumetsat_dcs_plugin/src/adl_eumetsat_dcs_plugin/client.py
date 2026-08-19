@@ -1,11 +1,10 @@
 import gzip
 import logging
 import re
-from urllib.parse import quote, urlencode, urljoin
-
 import requests
 from bs4 import BeautifulSoup
 from django.core.cache import cache
+from urllib.parse import quote, urlencode, urljoin
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +15,7 @@ class DCSWebServiceConnectionError(Exception):
     pass
 
 
-# Lenient regex-based parsers for the TWO distinct XML-ish body formats
+# Lenient regex-based parsers for the THREE distinct body formats
 # observed on this station's messages -- they are NOT the same format at
 # different verbosity, they're structurally different:
 #
@@ -32,16 +31,18 @@ class DCSWebServiceConnectionError(Exception):
 #     <FIRMWARE>version</FIRMWARE>
 #     YYYYMMDD;HHMMSS;value
 #
-# Both are parsed leniently (not with a strict XML parser) because real
-# bodies from this platform have been observed truncated mid-document --
-# a strict parser would just raise on those. Each format's regex greedily
-# extracts whatever complete entries it can find, tolerating a cut-off
-# tail entry.
+#   Format C (colon-tag compact ASCII, e.g. DCP 18CAD718), one entry per
+#   channel reading on a single line:
+#     :WISI 25 #60 2.3 :WIDI 25 #60 223.8 :WSMA 25 #60 4.6 ...
+#   See the comment above _FORMAT_C_ENTRY_RE for what's confirmed vs.
+#   guessed about this format -- it's only been seen in ONE full message
+#   so far, unlike A and B.
 #
-# A third body encoding seen on this same station (colon-tag compact
-# ASCII like ":WSMN 25 #60 0.4") is NOT handled by either parser below --
-# both correctly return no matches for it, so parse_xml_body() returns
-# None rather than guessing.
+# All three are parsed leniently (not with a strict XML/text parser)
+# because real bodies from this platform have been observed truncated
+# mid-document -- a strict parser would just raise on those. Each
+# format's regex greedily extracts whatever complete entries it can
+# find, tolerating a cut-off tail entry.
 _FORMAT_A_STATION_RE = re.compile(rb'<StationData stationId="([^"]*)" name="([^"]*)" timezone="([^"]*)"')
 _FORMAT_A_CHANNEL_RE = re.compile(
     rb'<ChannelData channelId="([^"]*)" name="([^"]*)" unit="([^"]*)">\s*'
@@ -53,16 +54,58 @@ _FORMAT_B_RE = re.compile(
     rb'<FIRMWARE>([^<]*)</FIRMWARE>\r?\n([0-9]{8});([0-9]{6});([^\r\n]*)'
 )
 
+# Format C: repeating ":CODE NUM1 #NUM2 VALUE" channel entries, e.g.
+# ":WISI 25 #60 2.3" or ":WSMN 25 #60 0.4" (the latter is the example
+# noted in parse_xml_body's docstring before this format was handled).
+#
+# Confirmed against exactly ONE real message body (DCP 18CAD718, seq
+# 197, 19/08/26 11:25:17) -- treat the structure as a working
+# hypothesis, not confirmed universal the way Format A/B's shapes are:
+#
+#   - CODE: channel code, same shape as the channel IDs in Formats A/B.
+#   - NUM1 and the digits after '#' (NUM2): constant (25 and 60) across
+#     every entry in the one message seen. Possibly a fixed element/
+#     table id and a reporting interval in minutes -- that's a guess,
+#     not confirmed, so these are kept as opaque "unknown_1"/"unknown_2"
+#     fields in _parse_format_c rather than named/typed. Re-evaluate
+#     once messages where these vary turn up.
+#   - VALUE: the reading, kept as a string for the same reason values
+#     are kept as strings elsewhere in this module (see parse_xml_body).
+#
+# The one sample seen also has a trailer after the channel entries:
+#   :BL 13.03 :UUID 23n,7<raw binary bytes>
+# ":BL" and any other trailing ":TAG value" pair that lacks the '#'
+# marker is captured generically via _FORMAT_C_EXTRA_RE into an
+# "extra_fields" dict -- NOT assumed to mean "battery level" or
+# anything else; that would be reading meaning into a tag name from a
+# single sample. ":UUID" is followed by what looks like raw binary (a
+# CRC/checksum?), not clean ASCII text, so it deliberately doesn't
+# match this pattern and is left unparsed rather than guessed at.
+#
+# No station id, name, or timezone appear anywhere in this body
+# encoding (unlike Format A), so _parse_format_c always returns None
+# for those. One loose observation, not acted on below: in the single
+# sample seen, the message's 12-byte body preamble (see DCPMessage's
+# docstring) opens with 4 bytes (\x18\xca\xd7\x18) identical to the
+# DCP ID (18CAD718) read as raw hex -- possibly the preamble encodes
+# the station id, but that's one data point and isn't relied on here.
+_FORMAT_C_ENTRY_RE = re.compile(
+    rb':(\S+)\s+(\d+)\s+#(\d+)\s+(-?\d+(?:\.\d+)?)'
+)
+_FORMAT_C_EXTRA_RE = re.compile(
+    rb':(\S+)\s+(-?\d+(?:\.\d+)?)(?=\s|$)'
+)
+
 
 def _parse_format_a(body):
     station_match = _FORMAT_A_STATION_RE.search(body)
     if station_match is None:
         return None
-
+    
     station_id, station_name, timezone = (
         g.decode("ascii", errors="replace") for g in station_match.groups()
     )
-
+    
     channels = []
     for channel_id, name, unit, time_, errorcode, value in _FORMAT_A_CHANNEL_RE.findall(body):
         channels.append({
@@ -73,7 +116,7 @@ def _parse_format_a(body):
             "value": value.decode("ascii", errors="replace"),
             "errorcode": errorcode.decode("ascii", errors="replace") if errorcode else None,
         })
-
+    
     return {
         "station_id": station_id,
         "station_name": station_name,
@@ -86,7 +129,7 @@ def _parse_format_b(body):
     matches = _FORMAT_B_RE.findall(body)
     if not matches:
         return None
-
+    
     station_id = None
     channels = []
     for station, sensor, dateformat, firmware, date_str, time_str, value in matches:
@@ -94,7 +137,7 @@ def _parse_format_b(body):
         dateformat = dateformat.decode("ascii", errors="replace")
         date_str = date_str.decode("ascii", errors="replace")
         time_str = time_str.decode("ascii", errors="replace")
-
+        
         # only YYYYMMDD observed so far; fall back to raw strings for
         # anything else rather than guessing a different layout
         if dateformat == "YYYYMMDD" and len(date_str) == 8 and len(time_str) == 6:
@@ -104,7 +147,7 @@ def _parse_format_b(body):
             )
         else:
             time_iso = f"{date_str};{time_str}"
-
+        
         channels.append({
             "channel_id": sensor.decode("ascii", errors="replace"),
             "name": None,  # not present in this compact format
@@ -114,7 +157,7 @@ def _parse_format_b(body):
             "errorcode": None,
             "firmware": firmware.decode("ascii", errors="replace"),
         })
-
+    
     return {
         "station_id": station_id,
         "station_name": None,
@@ -123,35 +166,88 @@ def _parse_format_b(body):
     }
 
 
+def _parse_format_c(body):
+    entry_matches = list(_FORMAT_C_ENTRY_RE.finditer(body))
+    if not entry_matches:
+        return None
+    
+    channels = []
+    matched_spans = []
+    for m in entry_matches:
+        code, num1, num2, value = m.groups()
+        matched_spans.append(m.span())
+        channels.append({
+            "channel_id": code.decode("ascii", errors="replace"),
+            "name": None,  # not present in this compact format
+            "unit": None,  # not present in this compact format
+            "time": None,  # not present in this body -- use the
+            # containing DCPMessage's .date/.time instead
+            "value": value.decode("ascii", errors="replace"),
+            "errorcode": None,
+            "unknown_1": num1.decode("ascii", errors="replace"),
+            "unknown_2": num2.decode("ascii", errors="replace"),
+        })
+    
+    # Strip out everything already claimed by the channel-entry regex,
+    # then look for remaining simple ":TAG value" pairs (e.g. ":BL
+    # 13.03") in what's left over. Doing it in this order -- rather than
+    # one combined regex -- avoids _FORMAT_C_EXTRA_RE accidentally
+    # matching just the first two tokens of a channel entry (":WISI 25"
+    # looks exactly like a valid ":TAG value" pair on its own).
+    remainder = body
+    for start, end in sorted(matched_spans, reverse=True):
+        remainder = remainder[:start] + remainder[end:]
+    
+    extra_fields = {}
+    for m in _FORMAT_C_EXTRA_RE.finditer(remainder):
+        tag, value = m.groups()
+        extra_fields[tag.decode("ascii", errors="replace")] = value.decode("ascii", errors="replace")
+    
+    return {
+        "station_id": None,
+        "station_name": None,
+        "timezone": None,
+        "channels": channels,
+        "extra_fields": extra_fields,
+    }
+
+
 def parse_xml_body(body):
     """
-    Parses either of the two XML-ish DCP body formats seen on this
-    station (see comments above _FORMAT_A_STATION_RE / _FORMAT_B_RE for
-    what each looks like) into one normalized JSON-serializable dict:
+    Parses any of the three DCP body formats seen on this station (see
+    comments above _FORMAT_A_STATION_RE / _FORMAT_B_RE / _FORMAT_C_ENTRY_RE
+    for what each looks like) into one normalized JSON-serializable dict:
 
         {
           "station_id": "000NEGHELE",
-          "station_name": "Neghele" or None (Format B doesn't carry this),
-          "timezone": "+03:00" or None (Format B doesn't carry this),
+          "station_name": "Neghele" or None (Formats B/C don't carry this),
+          "timezone": "+03:00" or None (Formats B/C don't carry this),
           "channels": [
             {"channel_id": "WSAV", "name": "WSAV_S" or None, "unit": "m/s" or None,
-             "time": "2026-07-08T15:50:00", "value": "0.9", "errorcode": None,
-             "firmware": "V8.81.4062"},  # only present for Format B entries
+             "time": "2026-07-08T15:50:00" or None (Format C has no per-channel
+             time -- use the containing DCPMessage's .date/.time), "value": "0.9",
+             "errorcode": None,
+             "firmware": "V8.81.4062",  # only present for Format B entries
+             "unknown_1": "25", "unknown_2": "60"},  # only present for Format C
             ...
-          ]
+          ],
+          "extra_fields": {"BL": "13.03"},  # only present for Format C, and
+                                             # only when trailing tags beyond
+                                             # the channel entries were found
         }
 
-    Tries Format A first, then Format B. Returns None if neither matches
-    -- callers should treat None as "this body uses some other encoding
-    entirely" (e.g. the colon-tag compact format also seen on this
-    station), not as an error.
+    Tries Format A, then Format B, then Format C. Returns None if none
+    match -- callers should treat None as "this body uses some other
+    encoding entirely" (e.g. the ":UUID"-prefixed binary trailer seen
+    tacked onto Format C messages isn't itself a format this function
+    handles), not as an error.
 
     Values are kept as strings, not cast to float/int, since malformed
     or truncated messages could contain partial/invalid numeric text --
     casting here would trade a clean failure for a silent bad value.
     Cast downstream once you've decided how to handle that per field.
     """
-    return _parse_format_a(body) or _parse_format_b(body)
+    return _parse_format_a(body) or _parse_format_b(body) or _parse_format_c(body)
 
 
 class DCPMessage:
@@ -193,10 +289,10 @@ class DCPMessage:
     treated as universal -- they may be EUMETSAT-format constants that
     hold everywhere, or may vary by platform/firmware.
     """
-
+    
     HEADER_LENGTH = 88
     QUALITY_RECORD_LENGTH = 33
-
+    
     # matches line 2 of the header only, ending exactly at the header's
     # last byte -- this lets header_start be derived as match.end() -
     # HEADER_LENGTH without needing to know line 1's station-name
@@ -205,7 +301,7 @@ class DCPMessage:
     _HEADER_RE = re.compile(
         rb'(\S+)-ALL\s+(\d+) at (\d{2}/\d{2}/\d{2}) (\d{2}:\d{2}:\d{2}) UTC (\d{5})BT (\S)\r\n'
     )
-
+    
     def __init__(self, header, quality_record, body, dcp_id, sequence, date, time_, flag, declared_size):
         self.header = header
         self.quality_record = quality_record
@@ -216,7 +312,7 @@ class DCPMessage:
         self.time = time_  # string, HH:MM:SS as transmitted
         self.flag = flag
         self.declared_size = declared_size
-
+    
     @classmethod
     def iter_from_bulk(cls, data):
         """
@@ -232,17 +328,17 @@ class DCPMessage:
         for m in cls._HEADER_RE.finditer(data):
             dcp_id, seq, date, time_, size_str, flag = m.groups()
             size = int(size_str)
-
+            
             header_start = m.end() - cls.HEADER_LENGTH
             header = data[header_start:m.end()]
-
+            
             quality_start = m.end()
             quality_end = quality_start + cls.QUALITY_RECORD_LENGTH
             quality_record = data[quality_start:quality_end]
-
+            
             body_start = quality_end
             body_end = body_start + size
-
+            
             if body_end > len(data):
                 raise DCSWebServiceConnectionError(
                     f"Message at offset {header_start} declares a "
@@ -250,9 +346,9 @@ class DCPMessage:
                     "download -- the fixed header/quality lengths may "
                     "not hold for this data"
                 )
-
+            
             body = data[body_start:body_end]
-
+            
             yield cls(
                 header=header,
                 quality_record=quality_record,
@@ -264,7 +360,7 @@ class DCPMessage:
                 flag=flag.decode("ascii", errors="replace"),
                 declared_size=size,
             )
-
+    
     @property
     def body_text(self):
         """
@@ -281,7 +377,7 @@ class DCPMessage:
             return self.body.decode("ascii")
         except UnicodeDecodeError:
             return self.body.decode("ascii", errors="replace")
-
+    
     @property
     def data(self):
         """
@@ -291,7 +387,7 @@ class DCPMessage:
         aren't handled by parse_xml_body() -- see its docstring).
         """
         return parse_xml_body(self.body)
-
+    
     def __repr__(self):
         return (
             f"<DCPMessage {self.dcp_id} seq={self.sequence} "
@@ -315,43 +411,43 @@ def parse_dcp_admin_page(html):
     header/summary/button rows fall through harmlessly.
     """
     soup = BeautifulSoup(html, "html.parser")
-
+    
     operator = None
     heading = soup.find("h3", class_="contentMiddleHead")
     if heading and "Operator" in heading.get_text():
         operator = heading.get_text(strip=True).replace("Operator:", "").strip()
-
+    
     target_table = None
     for table in soup.find_all("table"):
         header_text = table.get_text()
         if "DCP ID" in header_text and "Num Messages" in header_text:
             target_table = table
             break
-
+    
     if target_table is None:
         raise DCSWebServiceConnectionError(
             "Could not find the registered-DCP table on the DCP_ADMIN "
             "page -- page structure may differ from what this client "
             "expects (or the session bounced to a login page)"
         )
-
+    
     def is_spacer_cell(td):
         classes = td.get("class") or []
         return any("separator" in c for c in classes)
-
+    
     dcps = []
     for row in target_table.find_all("tr"):
         content_cells = [
             td for td in row.find_all("td") if not is_spacer_cell(td)
         ]
-
+        
         if len(content_cells) != 8:
             continue  # header row, divider row, or unrelated row
-
+        
         num_messages_text = content_cells[4].get_text(strip=True)
         if not num_messages_text.isdigit():
             continue
-
+        
         dcps.append({
             "dcp_id": content_cells[1].get_text(strip=True),
             "name": content_cells[2].get_text(strip=True),
@@ -359,7 +455,7 @@ def parse_dcp_admin_page(html):
             "num_messages": int(num_messages_text),
             "most_recent_message": content_cells[5].get_text(strip=True) or None,
         })
-
+    
     return {"operator": operator, "dcps": dcps}
 
 
@@ -373,35 +469,35 @@ class DCSWebServiceClient:
     from the "dcpwebservice" public viewer path seen in some browser
     sessions -- confirm which one your account credentials are valid on.
     """
-
+    
     def __init__(self, baseurl, user, password):
         self.baseurl = baseurl.rstrip("/")
         self.user = user
         self.password = password
         self._cached_session = None
-
+    
     def get(self, action, params=None):
         if params is None:
             params = {}
-
+        
         params = {
             "action": action,
             "user": self.user,
             "pass": self.password,
             **params,
         }
-
+        
         url = f"{self.baseurl}/dcpAdmin.do"
         response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-
+        
         if response.status_code != 200:
             raise DCSWebServiceConnectionError(
                 f"DCS Web Service returned {response.status_code} "
                 f"for action={action}"
             )
-
+        
         return response
-
+    
     def build_download_url(self, dcp_id, date=None):
         """
         Builds the stateless ACTION_DOWNLOAD URL for a DCP ID:
@@ -432,9 +528,9 @@ class DCSWebServiceClient:
         }
         if date:
             params["dcp_date"] = date
-
+        
         return f"{self.baseurl}/dcpAdmin.do?{urlencode(params, quote_via=quote)}"
-
+    
     def download_raw(self, dcp_id):
         """
         Calls the stateless automatic download endpoint (ACTION_DOWNLOAD)
@@ -448,11 +544,11 @@ class DCSWebServiceClient:
         """
         response = self.get("ACTION_DOWNLOAD", {"id": dcp_id})
         content = response.content
-
+        
         if content[:2] == b"\x1f\x8b":
             # gzip magic bytes -- the documented payload
             return content
-
+        
         # An HTML login/error page opens with a tag; non-gzipped bulk
         # data opens with the ASCII message header (8-digit code +
         # station name), never '<'.
@@ -463,9 +559,9 @@ class DCSWebServiceClient:
                 f"Expected gzip data for DCP {dcp_id}, got an HTML response "
                 "back (check credentials and DCP ID)"
             )
-
+        
         return content
-
+    
     def get_messages(self, dcp_id):
         """
         Downloads and splits the response for a DCP ID into individual
@@ -483,24 +579,24 @@ class DCSWebServiceClient:
         bytes if that fails, rather than assuming one or the other.
         """
         raw = self.download_raw(dcp_id)
-
+        
         try:
             data = gzip.decompress(raw)
         except OSError:
             # not actually gzip -- assume it's already plain/decompressed
             data = raw
-
+        
         messages = list(DCPMessage.iter_from_bulk(data))
-
+        
         if not messages:
             raise DCSWebServiceConnectionError(
                 f"No messages could be parsed from the response for DCP "
                 f"{dcp_id} ({len(data)} bytes) -- header pattern may not "
                 "match this data"
             )
-
+        
         return messages
-
+    
     def _login_session(self):
         """
         Logs in to the DCS Web Service and returns a NEW authenticated
@@ -526,24 +622,24 @@ class DCSWebServiceClient:
         """
         session = requests.Session()
         login_url = f"{self.baseurl}/logon.do"
-
+        
         payload = {
             "username": self.user,
             "password": self.password,
             "submit": "Submit",
         }
-
+        
         response = session.post(login_url, data=payload, timeout=REQUEST_TIMEOUT)
         if response.status_code != 200:
             raise DCSWebServiceConnectionError(
                 f"Login POST failed ({response.status_code})"
             )
-
+        
         if "JSESSIONID" not in session.cookies.get_dict():
             raise DCSWebServiceConnectionError(
                 "Login did not return a JSESSIONID cookie -- check credentials"
             )
-
+        
         # Heuristic success check: if the response page still contains a
         # password field, treat that as a failed login rather than
         # assuming the POST worked (a wrong password may still return
@@ -554,9 +650,9 @@ class DCSWebServiceClient:
                 "Login appears to have failed (a password field is still "
                 "present on the response page) -- check credentials"
             )
-
+        
         return session
-
+    
     def _get_session(self, force_relogin=False):
         """
         Returns a cached, logged-in session, reused across calls instead
@@ -567,7 +663,7 @@ class DCSWebServiceClient:
         if self._cached_session is None or force_relogin:
             self._cached_session = self._login_session()
         return self._cached_session
-
+    
     def list_available(self, dcp_id):
         """
         Returns metadata plus the list of available messages for a DCP
@@ -622,23 +718,23 @@ class DCSWebServiceClient:
         block is missing.
         """
         session = self._get_session()
-
+        
         url = f"{self.baseurl}/dcpAdmin.do"
         params = {"action": "ACTION_LIST", "id": dcp_id}
-
+        
         response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
         if response.status_code != 200:
             raise DCSWebServiceConnectionError(
                 f"ACTION_LIST returned {response.status_code} for DCP {dcp_id}"
             )
-
+        
         soup = BeautifulSoup(response.text, "html.parser")
-
+        
         operator = None
         heading = soup.find("h3", class_="contentMiddleHead")
         if heading and "Operator" in heading.get_text():
             operator = heading.get_text(strip=True).replace("Operator:", "").strip()
-
+        
         summary = {}
         for table in soup.find_all("table"):
             if "DCP ID:" not in table.get_text():
@@ -649,39 +745,39 @@ class DCSWebServiceClient:
                 if td:
                     summary[label] = td.get_text(strip=True)
             break
-
+        
         target_table = None
         for table in soup.find_all("table"):
             header_text = table.get_text()
             if "Date" in header_text and "Size of Data" in header_text:
                 target_table = table
                 break
-
+        
         if target_table is None:
             raise DCSWebServiceConnectionError(
                 f"Could not find the message list table for DCP {dcp_id} "
                 "-- page structure may differ from what this client expects"
             )
-
+        
         def is_spacer_cell(td):
             classes = td.get("class") or []
             return any("separator" in c for c in classes)
-
+        
         entries = []
         for row in target_table.find_all("tr"):
             content_cells = [
                 td for td in row.find_all("td") if not is_spacer_cell(td)
             ]
-
+            
             if len(content_cells) != 3:
                 continue  # header row, divider row, or unrelated row
-
+            
             date_text = content_cells[0].get_text(strip=True)
             size_text = content_cells[1].get_text(strip=True)
-
+            
             if not size_text.isdigit():
                 continue
-
+            
             link_tag = content_cells[2].find("a")
             show_url = (
                 requests.utils.requote_uri(urljoin(response.url, link_tag["href"]))
@@ -689,14 +785,14 @@ class DCSWebServiceClient:
                 else None
             )
             download_url = self.build_download_url(dcp_id, date=date_text)
-
+            
             entries.append({
                 "date": date_text,
                 "size": int(size_text),
                 "show_url": show_url,
                 "download_url": download_url,
             })
-
+        
         return {
             "operator": operator,
             "dcp_id": summary.get("DCP ID"),
@@ -704,7 +800,7 @@ class DCSWebServiceClient:
             "downloaded_date": summary.get("Downloaded Date"),
             "messages": entries,
         }
-
+    
     def get_message_detail(self, dcp_id, date):
         """
         Fetches and parses a single message via the "Show" page (the
@@ -774,25 +870,25 @@ class DCSWebServiceClient:
         """
         list_url = f"{self.baseurl}/dcpAdmin.do"
         list_params = {"action": "ACTION_LIST", "id": dcp_id}
-
+        
         detail_url = f"{self.baseurl}/dcp.do"
         detail_params = {"action": "ACTION_LIST", "id": dcp_id, "dcp_date": date}
-
+        
         def is_spacer(tag):
             classes = tag.get("class") or []
             return any("separator" in c for c in classes)
-
+        
         def next_real_td(th):
             sib = th.find_next_sibling("td")
             while sib is not None and is_spacer(sib):
                 sib = sib.find_next_sibling("td")
             return sib
-
+        
         last_response = None
-
+        
         for attempt in range(2):
             session = self._get_session(force_relogin=(attempt == 1))
-
+            
             # Visit the DCP's list page first with the same session, to
             # establish whatever server-side "currently selected DCP"
             # state this app tracks -- observed empirically: hitting
@@ -805,20 +901,20 @@ class DCSWebServiceClient:
             if list_response.status_code != 200:
                 last_response = list_response
                 continue
-
+            
             response = session.get(detail_url, params=detail_params, timeout=REQUEST_TIMEOUT)
             last_response = response
-
+            
             if response.status_code != 200:
                 continue  # try again with a fresh login before giving up
-
+            
             soup = BeautifulSoup(response.text, "html.parser")
-
+            
             if soup.find("input", {"type": "password"}):
                 # bounced back to a login form -- cached session was
                 # stale; force a fresh login and retry once
                 continue
-
+            
             fields = {}
             hex_pre = None
             for th in soup.find_all("th"):
@@ -834,7 +930,7 @@ class DCSWebServiceClient:
                     continue  # redundant with HEX, skipped -- see docstring
                 else:
                     fields[label] = td.get_text(strip=True)
-
+            
             if hex_pre is not None:
                 hex_text = hex_pre.get_text()
                 hex_bytes_str = re.sub(r'[0-9a-f]{4}:', '', hex_text)
@@ -845,11 +941,11 @@ class DCSWebServiceClient:
                     "data": parse_xml_body(body),
                     "raw_body": body,
                 }
-
+            
             # page loaded, wasn't a login page, but has no HEX table --
             # not a session problem, so don't burn the retry on it
             break
-
+        
         status = last_response.status_code if last_response is not None else "no response"
         snippet = last_response.text[:300].strip() if last_response is not None else ""
         raise DCSWebServiceConnectionError(
@@ -860,13 +956,13 @@ class DCSWebServiceClient:
             "or the page structure differs from what this client expects. "
             f"Response snippet: {snippet!r}"
         )
-
+    
     @property
     def registered_dcps_cache_key(self):
         # The registered-DCP roster is per account (unlike per-DCP message
         # caches), so the key namespaces by user + base URL.
         return f"dcs_web_service_registered_dcps_{self.user}_{self.baseurl}"
-
+    
     def list_registered_dcps(self, cache_ttl=86400):
         """
         Returns the DCPs registered to this account, from the "DCP
@@ -896,25 +992,25 @@ class DCSWebServiceClient:
         cached = cache.get(self.registered_dcps_cache_key)
         if cached is not None:
             return cached
-
+        
         session = self._get_session()
-
+        
         url = f"{self.baseurl}/mainMenuAction.do"
         params = {"action": "DCP_ADMIN"}
-
+        
         response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
         if response.status_code != 200:
             raise DCSWebServiceConnectionError(
                 f"DCP_ADMIN returned {response.status_code}"
             )
-
+        
         result = parse_dcp_admin_page(response.text)
         cache.set(self.registered_dcps_cache_key, result, cache_ttl)
         return result
-
+    
     def clear_registered_dcps_cache(self):
         cache.delete(self.registered_dcps_cache_key)
-
+    
     def get_latest_observations(self, dcp_id, cache_ttl=300):
         """
         Convenience wrapper: fetches messages for a DCP and caches the
@@ -931,10 +1027,10 @@ class DCSWebServiceClient:
         """
         cache_key = f"dcs_web_service_{dcp_id}"
         cached = cache.get(cache_key)
-
+        
         if cached is not None:
             return cached
-
+        
         messages = self.get_messages(dcp_id)
         cache.set(cache_key, messages, cache_ttl)
         return messages
