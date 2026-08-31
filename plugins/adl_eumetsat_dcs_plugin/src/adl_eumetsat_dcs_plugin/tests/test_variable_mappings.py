@@ -23,7 +23,8 @@ from adl_eumetsat_dcs_plugin.utils import extract_observed_channels
 
 from .helpers import (
     BODY_PREAMBLE,
-    COLON_TAG_BODY,
+    FORMAT_C_BODY,
+    UNPARSED_BODY,
     FORMAT_A_BODY_WITH_ERRORCODE,
     FORMAT_B_BODY,
     build_bulk,
@@ -116,9 +117,24 @@ class ExtractObservedChannelsTests(SimpleTestCase):
         self.assertEqual(codes, ["TAAV"])
 
     def test_unparsed_body_encodings_contribute_nothing(self):
-        msgs = messages_from_specs({"body": COLON_TAG_BODY})
+        msgs = messages_from_specs({"body": UNPARSED_BODY})
 
         self.assertEqual(extract_observed_channels(msgs), [])
+
+    def test_format_c_channels_are_listed(self):
+        # Format C carries no name/unit, but its channel codes must
+        # still surface so the operator can map them.
+        msgs = messages_from_specs({"body": FORMAT_C_BODY})
+
+        channels = extract_observed_channels(msgs)
+
+        self.assertEqual([c["channel_id"] for c in channels],
+                         ["00BV", "PRCI", "PREI", "RHUI", "TMPI",
+                          "WDMA", "WIDI", "WISI", "WSMA"])
+        wisi = next(c for c in channels if c["channel_id"] == "WISI")
+        self.assertIsNone(wisi["name"])
+        self.assertIsNone(wisi["unit"])
+        self.assertEqual(wisi["sample_value"], "1.32")
 
     def test_sorted_by_channel_id(self):
         msgs = messages_from_specs(

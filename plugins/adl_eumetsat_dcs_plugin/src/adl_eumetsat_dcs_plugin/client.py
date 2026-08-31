@@ -1,6 +1,8 @@
 import gzip
 import logging
 import re
+from datetime import datetime, timezone
+
 import requests
 from bs4 import BeautifulSoup
 from django.core.cache import cache
@@ -118,6 +120,7 @@ def _parse_format_a(body):
         })
     
     return {
+        "format": "a",
         "station_id": station_id,
         "station_name": station_name,
         "timezone": timezone,
@@ -159,6 +162,7 @@ def _parse_format_b(body):
         })
     
     return {
+        "format": "b",
         "station_id": station_id,
         "station_name": None,
         "timezone": None,
@@ -204,6 +208,7 @@ def _parse_format_c(body):
         extra_fields[tag.decode("ascii", errors="replace")] = value.decode("ascii", errors="replace")
     
     return {
+        "format": "c",
         "station_id": None,
         "station_name": None,
         "timezone": None,
@@ -219,13 +224,16 @@ def parse_xml_body(body):
     for what each looks like) into one normalized JSON-serializable dict:
 
         {
+          "format": "a" | "b" | "c"  (which parser matched),
           "station_id": "000NEGHELE",
           "station_name": "Neghele" or None (Formats B/C don't carry this),
           "timezone": "+03:00" or None (Formats B/C don't carry this),
           "channels": [
             {"channel_id": "WSAV", "name": "WSAV_S" or None, "unit": "m/s" or None,
-             "time": "2026-07-08T15:50:00" or None (Format C has no per-channel
-             time -- use the containing DCPMessage's .date/.time), "value": "0.9",
+             "time": "2026-07-08T15:50:00" or None (a Format C body has no
+             per-channel time -- DCPMessage.data fills it from the header's
+             transmission time; only a bare parse_xml_body call, which has
+             no header to draw on, leaves it None), "value": "0.9",
              "errorcode": None,
              "firmware": "V8.81.4062",  # only present for Format B entries
              "unknown_1": "25", "unknown_2": "60"},  # only present for Format C
@@ -382,11 +390,38 @@ class DCPMessage:
     def data(self):
         """
         Parsed JSON-serializable form of the body, via parse_xml_body().
-        None if this message's body isn't the XML-tagged format (the
-        colon-tag and pseudo-binary encodings seen on this same station
-        aren't handled by parse_xml_body() -- see its docstring).
+        None if the body matches none of the known formats (e.g. the
+        pseudo-binary encoding seen on this same station -- see
+        parse_xml_body's docstring).
+
+        Format C bodies carry no observation time of their own, so this
+        property fills each channel's None ``time`` with this message's
+        header transmission time as an aware UTC ISO string
+        ("2026-08-31T13:25:17+00:00") -- the only timestamp the message
+        actually carries. Note it's a transmission time, which lags the
+        underlying observation by however long the platform buffers
+        before transmitting. parse_xml_body() called directly (e.g. on
+        get_message_detail's HEX-decoded body, where no header is
+        available) leaves those times None instead.
         """
-        return parse_xml_body(self.body)
+        parsed = parse_xml_body(self.body)
+        if parsed is None or parsed["format"] != "c":
+            return parsed
+
+        try:
+            tx_time = datetime.strptime(
+                f"{self.date} {self.time}", "%d/%m/%y %H:%M:%S"
+            )
+        except ValueError:
+            # unparseable header time -- leave channel times None rather
+            # than guessing; downstream skips those channels
+            return parsed
+
+        time_iso = tx_time.replace(tzinfo=timezone.utc).isoformat()
+        for channel in parsed["channels"]:
+            if channel["time"] is None:
+                channel["time"] = time_iso
+        return parsed
     
     def __repr__(self):
         return (

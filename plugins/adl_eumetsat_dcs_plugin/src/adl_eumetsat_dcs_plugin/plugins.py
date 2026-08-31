@@ -45,8 +45,9 @@ class EumetsatDCSPlugin(Plugin):
 
             parsed = message.data
             if parsed is None:
-                # Colon-tag / pseudo-binary encodings — a future Format C
-                # parser slots into parse_xml_body without touching this.
+                # Pseudo-binary and other still-unparsed encodings — a
+                # future format parser slots into parse_xml_body without
+                # touching this.
                 logger.info("DCP %s seq %s: unparsed body encoding, skipped",
                             message.dcp_id, message.sequence)
                 continue
@@ -83,6 +84,15 @@ class EumetsatDCSPlugin(Plugin):
         timezone applies.
         """
         time_str = channel["time"]
+
+        if time_str is None:
+            # A body format with no per-channel time that DCPMessage.data
+            # couldn't fill from the header. Skip the channel rather than
+            # letting fromisoformat(None) raise TypeError and kill the
+            # station's whole cycle.
+            logger.warning("DCP %s seq %s: channel %s has no observation time, skipped",
+                           message.dcp_id, message.sequence, channel["channel_id"])
+            return None
 
         if body_timezone:
             # Format A: the body declares its own fixed offset.

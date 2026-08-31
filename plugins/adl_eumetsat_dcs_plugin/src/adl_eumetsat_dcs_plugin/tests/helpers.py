@@ -36,7 +36,26 @@ FORMAT_B_BODY = BODY_PREAMBLE + (
     b'20260805;120000;23.5'
 )
 
-COLON_TAG_BODY = BODY_PREAMBLE + b':WSMN 25 #60 0.4 :TAAV 25 #60 23.5'
+# Real Format C body captured from DCP 18CAD718 (ET/METEHARA), seq 394,
+# 31/08/26 13:25:17 UTC -- including its real 12-byte preamble and the
+# trailing binary CRC/checksum block, byte-for-byte.
+FORMAT_C_BODY = (
+    b'\x18\xca\xd7\x18\x00\xa3\x00y\x00\x00\x00\x00'
+    b':WISI 25 #60 1.32 :WIDI 25 #60 178.3 :WSMA 25 #60 2.17 '
+    b':WDMA 25 #60 125.7 :TMPI 25 #60 19.0 :RHUI 25 #60 67.7 '
+    b':PREI 25 #60 772.9 :PRCI 25 #60 0.0 :00BV 25 #60 13.6'
+    b'<\xde*\xcf \xbbS\xc6'
+)
+
+# Format C with the ":TAG value" trailer seen on the seq-197 sample
+# (":BL 13.03") plus a ":UUID"-style binary tail, which must NOT be
+# captured as an extra field (its value isn't clean numeric ASCII).
+FORMAT_C_BODY_WITH_EXTRAS = BODY_PREAMBLE + (
+    b':WSMN 25 #60 0.4 :TAAV 25 #60 23.5 :BL 13.03 :UUID 23n,7\x8f\x02'
+)
+
+# A body matching none of the three known formats (pseudo-binary).
+UNPARSED_BODY = BODY_PREAMBLE + b'\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7'
 
 
 def build_raw_message(body, dcp_id=b"188990C0", sequence=1,

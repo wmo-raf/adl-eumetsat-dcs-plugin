@@ -8,10 +8,12 @@ from adl_eumetsat_dcs_plugin.plugins import EumetsatDCSPlugin
 
 from .helpers import (
     BODY_PREAMBLE,
-    COLON_TAG_BODY,
     FORMAT_A_BODY,
     FORMAT_A_BODY_WITH_ERRORCODE,
     FORMAT_B_BODY,
+    FORMAT_C_BODY,
+    FORMAT_C_BODY_WITH_EXTRAS,
+    UNPARSED_BODY,
     build_raw_message,
 )
 
@@ -74,8 +76,54 @@ class GetStationDataTests(SimpleTestCase):
                          datetime(2026, 8, 5, 9, 0, tzinfo=timezone.utc))
         self.assertEqual(record["TAAV"], 23.5)
 
+    def test_format_c_uses_transmission_time(self):
+        # Format C bodies carry no observation time -- the header's
+        # transmission time (UTC) is used verbatim, regardless of the
+        # station link's configured observation timezone.
+        message = make_message(FORMAT_C_BODY, dcp_id=b"18CAD718",
+                               sequence=394, date=b"31/08/26",
+                               time_=b"13:25:17")
+
+        records = self.get_records([message])
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["observation_time"],
+                         datetime(2026, 8, 31, 13, 25, 17, tzinfo=timezone.utc))
+        self.assertEqual(record["WISI"], 1.32)
+        self.assertEqual(record["TMPI"], 19.0)
+        self.assertEqual(record["PRCI"], 0.0)
+        self.assertEqual(record["00BV"], 13.6)
+        # observation_time + the 9 channels, nothing else.
+        self.assertEqual(len(record), 10)
+
+    def test_format_c_extra_fields_not_ingested(self):
+        # unknown_1/unknown_2 and trailing ":TAG value" extras (":BL")
+        # are parser metadata, not observations.
+        message = make_message(FORMAT_C_BODY_WITH_EXTRAS,
+                               date=b"31/08/26", time_=b"13:25:17")
+
+        records = self.get_records([message])
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(sorted(record), ["TAAV", "WSMN", "observation_time"])
+
+    def test_none_channel_time_skipped_not_crashed(self):
+        # A channel time DCPMessage.data couldn't fill must be skipped
+        # with a warning, never reach fromisoformat(None) (TypeError).
+        message = SimpleNamespace(dcp_id="18CAD718", sequence=1)
+        channel = {"channel_id": "WISI", "time": None}
+        station_link = make_station_link([])
+
+        result = self.plugin._resolve_channel_time(
+            channel, None, station_link, message
+        )
+
+        self.assertIsNone(result)
+
     def test_unparsed_body_encoding_skipped(self):
-        message = make_message(COLON_TAG_BODY, date=b"05/08/26", time_=b"13:25:47")
+        message = make_message(UNPARSED_BODY, date=b"05/08/26", time_=b"13:25:47")
 
         self.assertEqual(self.get_records([message]), [])
 
