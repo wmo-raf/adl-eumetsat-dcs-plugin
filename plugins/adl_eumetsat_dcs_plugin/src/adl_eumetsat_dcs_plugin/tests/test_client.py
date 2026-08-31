@@ -11,10 +11,12 @@ from adl_eumetsat_dcs_plugin.client import (
 )
 
 from .helpers import (
-    COLON_TAG_BODY,
     FORMAT_A_BODY,
     FORMAT_A_BODY_WITH_ERRORCODE,
     FORMAT_B_BODY,
+    FORMAT_C_BODY,
+    FORMAT_C_BODY_WITH_EXTRAS,
+    UNPARSED_BODY,
     build_bulk,
     build_raw_message,
 )
@@ -26,7 +28,7 @@ class IterFromBulkTests(SimpleTestCase):
         data = build_bulk(
             {"body": FORMAT_A_BODY, "sequence": 1, "date": b"08/07/26", "time_": b"15:55:00"},
             {"body": FORMAT_B_BODY, "sequence": 2, "date": b"05/08/26", "time_": b"12:25:47"},
-            {"body": COLON_TAG_BODY, "sequence": 3, "date": b"05/08/26", "time_": b"13:25:47"},
+            {"body": FORMAT_C_BODY, "sequence": 3, "date": b"05/08/26", "time_": b"13:25:47"},
         )
 
         messages = list(DCPMessage.iter_from_bulk(data))
@@ -38,7 +40,7 @@ class IterFromBulkTests(SimpleTestCase):
         self.assertEqual(messages[0].time, "15:55:00")
         self.assertEqual(messages[0].body, FORMAT_A_BODY)
         self.assertEqual(messages[1].body, FORMAT_B_BODY)
-        self.assertEqual(messages[2].body, COLON_TAG_BODY)
+        self.assertEqual(messages[2].body, FORMAT_C_BODY)
         for message in messages:
             self.assertEqual(message.declared_size, len(message.body))
 
@@ -96,6 +98,7 @@ class ParseXmlBodyTests(SimpleTestCase):
         parsed = parse_xml_body(FORMAT_A_BODY)
 
         self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["format"], "a")
         self.assertEqual(parsed["station_id"], "000NEGHELE")
         self.assertEqual(parsed["station_name"], "Neghele")
         self.assertEqual(parsed["timezone"], "+03:00")
@@ -128,6 +131,7 @@ class ParseXmlBodyTests(SimpleTestCase):
         parsed = parse_xml_body(FORMAT_B_BODY)
 
         self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["format"], "b")
         self.assertEqual(parsed["station_id"], "000NEGHELE")
         self.assertIsNone(parsed["station_name"])
         self.assertIsNone(parsed["timezone"])
@@ -139,14 +143,57 @@ class ParseXmlBodyTests(SimpleTestCase):
         self.assertEqual(taav["value"], "23.5")
         self.assertEqual(taav["firmware"], "V8.81.4062")
 
-    def test_colon_tag_returns_none(self):
-        self.assertIsNone(parse_xml_body(COLON_TAG_BODY))
+    def test_format_c(self):
+        # Real METEHARA body, preamble and CRC tail included.
+        parsed = parse_xml_body(FORMAT_C_BODY)
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["format"], "c")
+        self.assertIsNone(parsed["station_id"])
+        self.assertIsNone(parsed["station_name"])
+        self.assertIsNone(parsed["timezone"])
+        self.assertEqual(parsed["extra_fields"], {})
+
+        self.assertEqual([c["channel_id"] for c in parsed["channels"]],
+                         ["WISI", "WIDI", "WSMA", "WDMA", "TMPI",
+                          "RHUI", "PREI", "PRCI", "00BV"])
+
+        wisi = parsed["channels"][0]
+        self.assertEqual(wisi["value"], "1.32")
+        self.assertIsNone(wisi["name"])
+        self.assertIsNone(wisi["unit"])
+        # Bare parse (no message header available) leaves times None.
+        self.assertIsNone(wisi["time"])
+        self.assertEqual(wisi["unknown_1"], "25")
+        self.assertEqual(wisi["unknown_2"], "60")
+
+    def test_format_c_extra_fields(self):
+        parsed = parse_xml_body(FORMAT_C_BODY_WITH_EXTRAS)
+
+        self.assertEqual([c["channel_id"] for c in parsed["channels"]],
+                         ["WSMN", "TAAV"])
+        # ":BL 13.03" is captured; the ":UUID" binary tail is not.
+        self.assertEqual(parsed["extra_fields"], {"BL": "13.03"})
+
+    def test_unparsed_body_returns_none(self):
+        self.assertIsNone(parse_xml_body(UNPARSED_BODY))
 
     def test_message_data_property(self):
-        data = build_raw_message(COLON_TAG_BODY)
+        data = build_raw_message(UNPARSED_BODY)
         (message,) = DCPMessage.iter_from_bulk(data)
         self.assertIsNone(message.data)
 
         data = build_raw_message(FORMAT_A_BODY)
         (message,) = DCPMessage.iter_from_bulk(data)
         self.assertEqual(message.data["timezone"], "+03:00")
+
+    def test_message_data_fills_format_c_times_from_header(self):
+        data = build_raw_message(FORMAT_C_BODY, dcp_id=b"18CAD718",
+                                 sequence=394, date=b"31/08/26",
+                                 time_=b"13:25:17")
+        (message,) = DCPMessage.iter_from_bulk(data)
+
+        parsed = message.data
+        self.assertEqual(parsed["format"], "c")
+        for channel in parsed["channels"]:
+            self.assertEqual(channel["time"], "2026-08-31T13:25:17+00:00")
