@@ -1,0 +1,26 @@
+# Extra services merged into the capture stack by
+# adl/scripts/capture-plugin-docs.sh.
+#
+# mock_dcs stands in for the EUMETSAT DCS Web Service, so this guide can be
+# captured without a live operator account: it serves the DCP Administration
+# roster, a per-DCP message list, and gzipped bulk downloads in the real
+# [header][quality][body] framing. See docs/screenshots/mock-dcs/server.py.
+#
+# To capture against the real service instead, put credentials in
+# docs/screenshots/credentials.env — the fixture reads DCS_BASE_URL,
+# DCS_USERNAME and DCS_PASSWORD from the environment and falls back to this
+# mock when they are absent.
+services:
+  mock_dcs:
+    build: ./docs/screenshots/mock-dcs
+    image: adl-docs-mock-dcs
+    environment:
+      DCS_USER: demo
+      DCS_PASSWORD: demo
+      DCS_OPERATOR: EMI
+    networks:
+      default:
+        aliases:
+          # Dotted, so the connection's base_url is a valid URL to Django's
+          # URLField and reads like a real host in captured screens.
+          - dcs.example.test

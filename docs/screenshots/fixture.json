@@ -1,0 +1,57 @@
+{
+  "capture": {
+    "connection": "Demo EUMETSAT DCS (mock source)",
+    "ingest": true,
+    "probe": false,
+    "station_checks": [],
+    "wait": 240,
+    "present_interval": 15
+  },
+  "connection": {
+    "model": "adl_eumetsat_dcs_plugin.EumetsatDCSConnection",
+    "fields": {
+      "name": "Demo EUMETSAT DCS (mock source)",
+      "plugin": "adl_eumetsat_dcs_plugin",
+      "stations_timezone": "Africa/Maputo",
+      "plugin_processing_interval": 1,
+      "base_url": "$ENV:DCS_BASE_URL|http://dcs.example.test/dcswebservice",
+      "dcs_user": "$ENV:DCS_USERNAME|demo",
+      "dcs_password": "$ENV:DCS_PASSWORD|demo"
+    }
+  },
+  "station_links": [
+    {
+      "model": "adl_eumetsat_dcs_plugin.EumetsatDCSStationLink",
+      "station": "DEMO001",
+      "fields": {
+        "dcp_id": "$ENV:DCS_DCP_ID|188990C0",
+        "observation_timezone": "UTC",
+        "start_date": "$NOW-1d"
+      },
+      "children": {
+        "variable_mappings": [
+          {"adl_parameter": "Air Temperature", "channel_id": "TAAV", "channel_unit": "degC"},
+          {"adl_parameter": "Relative Humidity", "channel_id": "RHUM", "channel_unit": "percent"},
+          {"adl_parameter": "Atmospheric Pressure", "channel_id": "PRES", "channel_unit": "hPa"},
+          {"adl_parameter": "Wind Speed", "channel_id": "WSAV", "channel_unit": "m/s"},
+          {"adl_parameter": "Wind Direction", "channel_id": "WDAV", "channel_unit": "degree"}
+        ]
+      }
+    },
+    {
+      "model": "adl_eumetsat_dcs_plugin.EumetsatDCSStationLink",
+      "station": "DEMO002",
+      "fields": {
+        "dcp_id": "1889A1E2",
+        "observation_timezone": "UTC",
+        "start_date": "$NOW-1d"
+      },
+      "children": {
+        "variable_mappings": [
+          {"adl_parameter": "Air Temperature", "channel_id": "TAAV", "channel_unit": "degC"},
+          {"adl_parameter": "Relative Humidity", "channel_id": "RHUM", "channel_unit": "percent"}
+        ]
+      }
+    }
+  ]
+}

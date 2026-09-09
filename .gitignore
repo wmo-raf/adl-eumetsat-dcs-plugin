@@ -175,3 +175,6 @@ docker-compose.override.yml
 
 # Redis snapshot written into the repo root by the dev stack's redis container
 dump.rdb
+
+# Documentation capture: live credentials, never committed
+docs/screenshots/credentials.env

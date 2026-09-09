@@ -1,0 +1,134 @@
+# Screenshot manifest for the ADL EUMETSAT DCS Plugin guide (docs/guide.md).
+# Regenerate from the adl repo:  scripts/capture-plugin-docs.sh ../adl-plugins/adl-eumetsat-dcs-plugin
+# Fixture (execution pass): an EUMETSAT DCS Connection (id 1) whose base URL points at a mock
+# DCS Web Service container in the capture compose (logon.do, mainMenuAction.do?action=DCP_ADMIN,
+# dcpAdmin.do ACTION_LIST/ACTION_DOWNLOAD, dcp.do) serving the synthetic messages from
+# tests/helpers.py for DCP 188990C0. Station link 1 = DCP 188990C0 with two mappings, one
+# collection cycle run before capture. Selectors are blind guesses — fix against the live pages.
+
+defaults:
+  viewport:
+  - 1440
+  - 900
+  padding: 12
+screenshots:
+- name: eumetsat_connection_form
+  url: /eumetsatdcsconnection/edit/1/
+  setup:
+  - fill: { selector: '#id_dcs_password', value: '••••••••••••' }
+  capture:
+    selector: "#w-editor-form"
+- name: eumetsat_station_link_form
+  url: /eumetsatdcsstationlink/edit/1/
+  setup:
+  # The widget fills this select over AJAX. An <option> inside a closed
+  # <select> is never *visible*, so wait_for on one times out — poll instead.
+  - wait_until: "document.querySelectorAll('#id_dcp_id option').length > 1"
+  callouts:
+  - badge:
+      target: '#id_dcp_id'
+      n: 1
+  - badge:
+      target: '#id_observation_timezone'
+      n: 2
+  - badge:
+      target: '#id_start_date'
+      n: 3
+  - badge:
+      target: 'a[href*="adl-eumetsat-dcs-plugin/variable-mappings/"]'
+      n: 4
+  capture:
+    selector: "#w-editor-form"
+- name: eumetsat_connection_row_actions
+  url: /connections/
+  setup:
+  - click: 'tr:has(a[href="/eumetsatdcsconnection/edit/1/"]) .w-dropdown__toggle'
+  - wait_for: 'a[href*="adl-eumetsat-dcs-plugin/messages/1/"]'
+  callouts:
+  - badge:
+      target: 'a[href*="adl-eumetsat-dcs-plugin/messages/1/"]'
+      n: 1
+  - badge:
+      target: 'a[href*="adl-eumetsat-dcs-plugin/refresh-dcps/1/"]'
+      n: 2
+  capture:
+    selector: main
+    max_height: 700
+- name: eumetsat_dcp_picker
+  url: /eumetsatdcsstationlink/new/
+  setup:
+  # The widget reads the connection from the form's own select
+  # (connectionId = this.networkConnectionInput.value), not from the URL, so
+  # on the add form the DCP list stays empty until a connection is chosen —
+  # which is also the order an operator fills the form in.
+  - select: { selector: '#id_network_connection', value: '1' }
+  # It then fills the DCP select over AJAX. An <option> inside a closed
+  # <select> is never *visible*, so wait_for on one times out — poll instead.
+  - wait_until: "document.querySelectorAll('#id_dcp_id option').length > 1"
+  # A native <select> renders its dropdown as an OS popup, which is not part
+  # of the page and never appears in a screenshot — clicking it produced a
+  # shot of a closed box reading "---------". Giving it a size renders the
+  # same options inline as a list, so the platforms the account is registered
+  # for are actually visible. Nothing is added or altered: these are the
+  # options the widget fetched.
+  - eval: "document.querySelector('#id_dcp_id').size = 4"
+  callouts:
+  - highlight: '#id_dcp_id'
+  capture:
+    selector: '#panel-dcp_id-section'
+- name: eumetsat_browse_messages
+  url: /adl-eumetsat-dcs-plugin/messages/1/?dcp_id=188990C0
+  callouts:
+  - badge:
+      target: '#dcp-id-select'
+      n: 1
+  - badge:
+      target: 'table.listing'
+      n: 2
+  capture:
+    selector: main
+    max_height: 1000
+- name: eumetsat_message_detail
+  # Reached by clicking a message rather than by URL: every message is dated
+  # relative to now, so any date hard-coded here is stale on the next run and
+  # the page answers "no message at that time".
+  url: /adl-eumetsat-dcs-plugin/messages/1/?dcp_id=188990C0
+  setup:
+  - click: 'a[href*="message-detail"]'
+  - wait_for: '.dcp-section'
+  callouts:
+  # Plain CSS: callout targets are resolved with querySelector, which does not
+  # implement Playwright's :nth-match().
+  - badge:
+      target: '.dcp-section:nth-of-type(1)'
+      n: 1
+  - badge:
+      target: '.dcp-section:nth-of-type(2)'
+      n: 2
+  - badge:
+      target: '.dcp-section:nth-of-type(3)'
+      n: 3
+  capture:
+    selector: main
+    max_height: 1400
+- name: eumetsat_variable_mappings
+  url: /adl-eumetsat-dcs-plugin/variable-mappings/1/?window=all
+  callouts:
+  - badge:
+      target: '#dcp-window-select'
+      n: 1
+  # The observed-channels table is the listing that is not the mapping
+  # formset; :nth-match() is Playwright-only and invalid in querySelector.
+  - badge:
+      target: 'table.listing:not(#mapping-formset-table)'
+      n: 2
+  - badge:
+      target: '#mapping-formset-table'
+      n: 3
+  capture:
+    selector: main
+    max_height: 1400
+- name: eumetsat_ingestion_diagnostic
+  url: /monitoring/connection/1/health/
+  capture:
+    selector: .health-diagnostic
