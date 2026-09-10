@@ -1,112 +1,49 @@
 # ADL EUMETSAT DCS Plugin
 
-An ADL plugin for ingesting DCP (Data Collection Platform) messages from the
-EUMETSAT Meteosat [Data Collection Service (DCS) Web Service](https://user.eumetsat.int/resources/user-guides/dcs-web-service-user-guide)
-(`https://service.eumetsat.int/dcswebservice/` — note `dcswebservice` with an
-*s*, distinct from the `dcpwebservice` public viewer path).
+Collects the messages that **Data Collection Platforms (DCPs)** transmit
+through Meteosat into an [ADL](https://github.com/wmo-raf/adl) instance, by
+logging in to the **EUMETSAT [Data Collection Service (DCS) Web
+Service](https://user.eumetsat.int/resources/user-guides/dcs-web-service-user-guide)**
+with an operator account and downloading each platform's message backlog.
+One connection holds one set of DCS credentials; one station link binds an
+ADL station to one DCP id and maps that platform's channel codes (`TAAV`,
+`WSAV`, …) to ADL parameters — codes vary by platform and firmware, so the
+mappings are per station.
 
-- One **EUMETSAT DCS Connection** holds one set of DCS Web Service credentials.
-- One **EUMETSAT DCS Station Link** binds an ADL station to one DCP ID
-  (e.g. `188990C0`) and maps DCP channel/sensor codes (e.g. `WSAV`, `TAAV`)
-  to ADL parameters. Channel codes vary per platform/firmware, so mappings
-  are configured per station.
-- The station link's **Observation Timezone** localizes body timestamps that
-  don't declare their own offset (compact Format-B bodies); verbose Format-A
-  XML bodies declare an offset which takes precedence.
-- The connection's **Browse DCP Messages** admin link lists the messages the
-  service holds for a DCP and renders individual messages (parsed channels
-  plus raw body) — a debug/browse convenience separate from ingestion.
+The plugin also adds a **Browse DCP Messages** admin view for reading the
+service's messages directly, which is a debugging convenience rather than
+part of ingestion.
 
-Ingestion pulls the full message backlog per DCP (the service's download
-endpoint ignores date scoping), caches it briefly, and filters client-side
-by transmission time. Message bodies using encodings the parser does not
-handle yet (colon-tag / pseudo-binary) are skipped with a log line.
+**Operator guide:** [docs/guide.md](docs/guide.md) — prerequisites, the
+account and DCP registration, every connection and station-link field, the
+DCP picker, the message browser, variable mappings, collection behaviour,
+diagnostics and troubleshooting. The guide is also published on the central
+ADL documentation site.
 
-## Getting started
+## Development setup
 
-### Prerequisites
-
-- Docker and Docker Compose installed on your machine.
-- Git installed on your machine.
-
-### Install and build the ADL Core Image
-
-The ADL EUMETSAT DCS Plugin is a module intended to be installed in an [ADL](https://github.com/wmo-raf/adl)
-instance. This means that you need to first get the core ADL system and build it on your local development environment.
-
-You can follow the instructions on the [ADL core repository](https://github.com/wmo-raf/adl) to install and build the
-ADL core image
-
-### Install ADL EUMETSAT DCS Plugin
-
-The `dev.Dockerfile` file uses the `adl` image as a base image. The `ADL EUMETSAT DCS Plugin` is
-installed during the build process. Using docker mounted volumes, the plugin is editable such that any changes made to
-the code trigger Django to reload the development server, allowing you to see the changes as you develop
-
-1. Clone the plugin repository:
+The plugin runs inside the ADL core image. Build the `adl:latest` image from
+the [ADL core repository](https://github.com/wmo-raf/adl) first, then:
 
 ```bash
 git clone https://github.com/wmo-raf/adl-eumetsat-dcs-plugin.git
 cd adl-eumetsat-dcs-plugin
-```
-
-2. Create a `.env` file using the provided `.env.sample` file:
-
-```bash
-cp .env.sample .env
-```
-
-3. Edit the `.env` file to set the required environment variables
-
-```bash
-nano .env
-```
-
-You can use the default values provided in the `.env.sample` file, but be sure to set the following correctly:
-
-- `PLUGIN_BUILD_UID`: The UID of the user that will run the plugin inside the container
-- `PLUGIN_BUILD_GID`: The GID of the user that will run the plugin inside the container
-
-You can find the UID and GID of your user by running the following command:
-
-```bash
-id -u
-id -g
-```
-
-4. Build the plugin image:
-
-```bash
+cp .env.sample .env        # set PLUGIN_BUILD_UID=$(id -u), PLUGIN_BUILD_GID=$(id -g), ADL_DB_PASSWORD
 docker compose build
-```
-
-If you are getting errors like
-`failed to solve: adl:latest: failed to resolve source metadata for docker.io/library/adl:latest: pull access denied`,
-you might need to disable `DOCKER_BUILDKIT` when building the image.
-
-You can do this by running the following
-
-```bash
-DOCKER_BUILDKIT=0  docker compose build
-```
-
-5. Start the plugin:
-
-```bash
 docker compose up
-```
-
-If everything is set up correctly, you should see the plugin starting up and listening for incoming requests. You can
-access the plugin at `http://localhost:8000`. The port number can be changed using the `PORT` environment variable in
-the `.env`. The default port is `8000`.
-
-6. Create superuser
-
-```bash
 docker compose exec adl adl createsuperuser
 ```
 
-The `adl`command is shorthand for `python manage.py` command. You can use it to run any Django management command
-inside the container.
+The admin is served on `PORT` (default 8080). The plugin source is
+bind-mounted, so code changes reload the dev server. If the build fails with
+`pull access denied` for `adl:latest`, prefix the build with
+`DOCKER_BUILDKIT=0`.
 
-
+Tests are Django-runner tests under
+`plugins/adl_eumetsat_dcs_plugin/src/adl_eumetsat_dcs_plugin/tests/`.
+`docs/screenshots/mock-dcs/` is a stub of the DCS Web Service used by the
+documentation capture harness, and is a useful way to exercise the client
+without an account. Lint and format from `plugins/adl_eumetsat_dcs_plugin/`
+with `make lint` and `make format`. See [CONTRIBUTING.md](CONTRIBUTING.md) —
+a change to any connection or station-link field must update the guide in the
+same PR, and a change to the client's parsing must update the mock.
